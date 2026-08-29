@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Master Trading Plan v2 — Mobile Portal</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Alpine.js CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen pb-24" x-data="tradingApp()">
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TOP MOBILE HEADER -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <header class="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-2">
+        <div class="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold text-lg">
+          🏆
+        </div>
+        <div>
+          <h1 class="text-sm font-bold tracking-tight text-slate-100">MASTER TRADING v2</h1>
+          <p class="text-[10px] text-slate-400 font-mono">6-Layer Intraday System</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2">
+        <!-- Live Window Pill -->
+        <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold font-mono tracking-wide"
+              :class="{
+                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': status.window_active,
+                'bg-amber-500/20 text-amber-400 border border-amber-500/30': status.window_name === 'DEAD_ZONE',
+                'bg-slate-800 text-slate-400 border border-slate-700': !status.window_active && status.window_name !== 'DEAD_ZONE'
+              }">
+          <span class="inline-block w-1.5 h-1.5 rounded-full mr-1"
+                :class="status.window_active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'"></span>
+          <span x-text="status.window_name || 'CLOSED'"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Quick Status Bar -->
+    <div class="grid grid-cols-3 gap-2 mt-3 pt-2.5 border-t border-slate-800/60 text-xs">
+      <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+        <div class="text-[10px] text-slate-400">Global Score</div>
+        <div class="font-bold font-mono mt-0.5"
+             :class="globalData.global_score >= 3 ? 'text-emerald-400' : 'text-amber-400'">
+          🌍 <span x-text="globalData.global_score !== undefined ? globalData.global_score + '/5' : '...'"></span>
+        </div>
+      </div>
+      <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+        <div class="text-[10px] text-slate-400">FII Activity</div>
+        <div class="font-bold font-mono text-slate-200 mt-0.5 truncate text-[11px]" x-text="fiiData.signal || 'Loading...'"></div>
+      </div>
+      <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+        <div class="text-[10px] text-slate-400">Nifty 50</div>
+        <div class="font-bold font-mono mt-0.5 text-[11px]"
+             :class="(scanData.nifty_change || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'">
+          <span x-text="(scanData.nifty_change >= 0 ? '+' : '') + (scanData.nifty_change || 0).toFixed(2) + '%'"></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MAIN TAB CONTENT -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <main class="p-4 space-y-4 max-w-lg mx-auto">
+
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <!-- TAB 1: LIVE SCANNER -->
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <div x-show="activeTab === 'scanner'" x-transition class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-slate-100">8-Shield Live Scanner</h2>
+          <p class="text-xs text-slate-400">Auto-refresh every 30s</p>
+        </div>
+        <button @click="fetchScan()"
+                class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 shadow-sm shadow-emerald-900/30">
+          <span :class="{'animate-spin': isScanning}">🔄</span>
+          <span x-text="isScanning ? 'Scanning...' : 'Scan Now'"></span>
+        </button>
+      </div>
+
+      <!-- Actionable entries alert -->
+      <template x-if="entryStocks.length > 0">
+        <div class="p-3.5 bg-emerald-500/10 border border-emerald-500/40 rounded-xl space-y-1">
+          <div class="flex items-center text-emerald-400 font-bold text-xs">
+            <span class="text-base mr-1.5">🔥</span> ACTIONABLE ENTRY DETECTED!
+          </div>
+          <p class="text-xs text-slate-300">
+            <span class="font-semibold text-emerald-300" x-text="entryStocks.map(s => s.symbol).join(', ')"></span>
+            passed all 8 Shields with high score!
+          </p>
+        </div>
+      </template>
+
+      <!-- Stock Cards List -->
+      <div class="space-y-3">
+        <template x-for="stock in scanData.stocks || []" :key="stock.symbol">
+          <div class="bg-slate-900 border rounded-xl overflow-hidden transition"
+               :class="{
+                 'border-emerald-500/50 shadow-md shadow-emerald-950/40': stock.grade === 'ELITE' || stock.grade === 'STRONG',
+                 'border-slate-800': stock.grade !== 'ELITE' && stock.grade !== 'STRONG'
+               }">
+
+            <!-- Card Header -->
+            <div class="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
+              <div class="flex items-center space-x-2.5">
+                <span class="font-bold text-sm tracking-wide text-slate-100" x-text="stock.symbol"></span>
+                <!-- Grade Pill -->
+                <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase font-mono tracking-wider"
+                      :class="{
+                        'bg-emerald-500 text-slate-950': stock.grade === 'ELITE',
+                        'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40': stock.grade === 'STRONG',
+                        'bg-amber-500/20 text-amber-400 border border-amber-500/40': stock.grade === 'AVERAGE',
+                        'bg-slate-800 text-slate-400': stock.grade === 'SKIP'
+                      }"
+                      x-text="stock.grade"></span>
+              </div>
+              <div class="text-right">
+                <div class="text-sm font-bold font-mono text-slate-100">₹<span x-text="stock.price.toFixed(2)"></span></div>
+                <div class="text-[10px] font-mono"
+                     :class="stock.price >= stock.vwap ? 'text-emerald-400' : 'text-rose-400'">
+                  VWAP ₹<span x-text="stock.vwap.toFixed(2)"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Trade Setup Box (if Entry) -->
+            <template x-if="stock.is_entry">
+              <div class="p-3 bg-emerald-950/30 border-b border-emerald-900/40 grid grid-cols-3 gap-2 text-center text-xs">
+                <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
+                  <div class="text-[10px] text-slate-400">Stop Loss</div>
+                  <div class="font-bold font-mono text-rose-400">₹<span x-text="stock.sl"></span></div>
+                </div>
+                <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
+                  <div class="text-[10px] text-slate-400">Target 1 (60%)</div>
+                  <div class="font-bold font-mono text-emerald-400">₹<span x-text="stock.t1"></span></div>
+                </div>
+                <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
+                  <div class="text-[10px] text-slate-400">Quantity</div>
+                  <div class="font-bold font-mono text-amber-300"><span x-text="stock.qty"></span> shs</div>
+                </div>
+              </div>
+            </template>
+
+            <!-- Card Body / Key Stats -->
+            <div class="p-3.5 space-y-2.5 text-xs">
+              <div class="flex items-center justify-between text-slate-300">
+                <span>Score: <b class="text-slate-100" x-text="stock.score"></b>/48</span>
+                <span>RSI: <b :class="stock.rsi >= 45 && stock.rsi <= 68 ? 'text-emerald-400' : 'text-slate-400'" x-text="stock.rsi.toFixed(1)"></b></span>
+                <span>ADX: <b :class="stock.adx >= 20 ? 'text-emerald-400' : 'text-slate-400'" x-text="stock.adx.toFixed(1)"></b></span>
+              </div>
+
+              <!-- Expandable 8-Shields Checklist -->
+              <details class="group">
+                <summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 flex items-center justify-between py-1 select-none">
+                  <span>View 8 Shields Breakdown</span>
+                  <span class="text-xs transition-transform group-open:rotate-180">▼</span>
+                </summary>
+                <div class="pt-2 space-y-1.5 text-[11px] border-t border-slate-800/80 mt-1">
+                  <template x-for="(shield, sname) in stock.shields" :key="sname">
+                    <div class="flex items-start justify-between">
+                      <span class="text-slate-400" x-text="sname"></span>
+                      <span class="font-mono text-right"
+                            :class="shield.passed ? 'text-emerald-400' : 'text-rose-400'"
+                            x-text="shield.passed ? '✓ PASS' : '✗ FAIL'"></span>
+                    </div>
+                  </template>
+                </div>
+              </details>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <!-- TAB 2: GLOBAL 8:00 AM BRIEFING -->
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <div x-show="activeTab === 'global'" x-transition class="space-y-4">
+      <div>
+        <h2 class="text-base font-bold text-slate-100">Layer 1: Global Market Check</h2>
+        <p class="text-xs text-slate-400">Assessed daily at 8:00 AM IST</p>
+      </div>
+
+      <!-- Global Score Hero Card -->
+      <div class="p-4 bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-2xl text-center space-y-2">
+        <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Global Score</div>
+        <div class="text-4xl font-extrabold font-mono text-emerald-400" x-text="globalData.global_score + ' / 5'"></div>
+        <p class="text-xs text-slate-300 font-medium" x-text="globalData.description"></p>
+      </div>
+
+      <!-- Global Factor Breakdown -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl divide-y divide-slate-800 text-xs">
+        <div class="p-3 flex justify-between items-center">
+          <div>
+            <div class="font-semibold text-slate-200">Gift Nifty Gap</div>
+            <div class="text-[10px] text-slate-400 font-mono" x-text="globalData.gift_nifty_signal"></div>
+          </div>
+          <div class="font-mono font-bold"
+               :class="(globalData.gift_nifty_gap || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'">
+            <span x-text="(globalData.gift_nifty_gap >= 0 ? '+' : '') + (globalData.gift_nifty_gap || 0).toFixed(0) + ' pts'"></span>
+          </div>
+        </div>
+
+        <div class="p-3 flex justify-between items-center">
+          <div>
+            <div class="font-semibold text-slate-200">US Markets (Dow / Nasdaq)</div>
+            <div class="text-[10px] text-slate-400 font-mono" x-text="globalData.us_signal"></div>
+          </div>
+          <div class="font-mono text-right font-bold text-slate-300">
+            <div>Dow: <span x-text="(globalData.us_dow_change || 0).toFixed(2) + '%'"></span></div>
+            <div>NQ: <span x-text="(globalData.us_nasdaq_change || 0).toFixed(2) + '%'"></span></div>
+          </div>
+        </div>
+
+        <div class="p-3 flex justify-between items-center">
+          <div>
+            <div class="font-semibold text-slate-200">Crude Oil (WTI)</div>
+            <div class="text-[10px] text-slate-400 font-mono" x-text="globalData.crude_signal"></div>
+          </div>
+          <div class="font-mono font-bold"
+               :class="(globalData.crude_change || 0) <= 0 ? 'text-emerald-400' : 'text-rose-400'">
+            <span x-text="(globalData.crude_change || 0).toFixed(2) + '%'"></span>
+          </div>
+        </div>
+
+        <div class="p-3 flex justify-between items-center">
+          <div>
+            <div class="font-semibold text-slate-200">USD / INR</div>
+            <div class="text-[10px] text-slate-400 font-mono" x-text="globalData.currency_signal"></div>
+          </div>
+          <div class="font-mono font-bold text-slate-300">
+            <span x-text="(globalData.usdinr_change || 0).toFixed(2) + '%'"></span>
+          </div>
+        </div>
+
+        <div class="p-3 flex justify-between items-center">
+          <div>
+            <div class="font-semibold text-slate-200">Asian Markets (Nikkei / Hang Seng)</div>
+            <div class="text-[10px] text-slate-400 font-mono" x-text="globalData.asia_signal"></div>
+          </div>
+          <div class="font-mono text-right font-bold text-slate-300">
+            <div>N225: <span x-text="(globalData.asia_nikkei_change || 0).toFixed(2) + '%'"></span></div>
+            <div>HSI: <span x-text="(globalData.asia_hangseng_change || 0).toFixed(2) + '%'"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <!-- TAB 3: BACKTEST ON MOBILE -->
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <div x-show="activeTab === 'backtest'" x-transition class="space-y-4">
+      <div>
+        <h2 class="text-base font-bold text-slate-100">Mobile Backtest Runner</h2>
+        <p class="text-xs text-slate-400">Run 60-day historical strategy backtest</p>
+      </div>
+
+      <!-- Controls -->
+      <div class="bg-slate-900 border border-slate-800 p-3.5 rounded-xl space-y-3 text-xs">
+        <div>
+          <label class="text-[11px] text-slate-400 font-semibold">Symbols (comma separated)</label>
+          <input type="text" x-model="btSymbols"
+                 class="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500">
+        </div>
+        <div class="flex space-x-2">
+          <div class="flex-1">
+            <label class="text-[11px] text-slate-400 font-semibold">Capital (₹)</label>
+            <input type="number" x-model="btCapital"
+                   class="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500">
+          </div>
+          <div class="flex-1 flex items-end">
+            <button @click="runBacktest()"
+                    :disabled="isBacktesting"
+                    class="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-bold rounded-lg transition active:scale-95 shadow-sm shadow-emerald-950">
+              <span x-text="isBacktesting ? 'Running...' : 'Run Backtest'"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backtest Results Summary -->
+      <template x-if="btResults">
+        <div class="space-y-3">
+          <!-- Metrics Grid -->
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+              <div class="text-[10px] text-slate-400">Win Rate</div>
+              <div class="text-lg font-bold font-mono text-emerald-400 mt-0.5">
+                <span x-text="btResults.metrics.win_rate.toFixed(1)"></span>%
+              </div>
+              <div class="text-[10px] text-slate-400 mt-1">
+                <span x-text="btResults.metrics.winners"></span>W / <span x-text="btResults.metrics.losers"></span>L
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+              <div class="text-[10px] text-slate-400">Net P&L</div>
+              <div class="text-lg font-bold font-mono mt-0.5"
+                   :class="btResults.metrics.net_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'">
+                ₹<span x-text="btResults.metrics.net_pnl.toFixed(2)"></span>
+              </div>
+              <div class="text-[10px] text-slate-400 mt-1">
+                ROI: <span x-text="btResults.metrics.return_on_capital.toFixed(2)"></span>%
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+              <div class="text-[10px] text-slate-400">Profit Factor</div>
+              <div class="text-base font-bold font-mono text-slate-200 mt-0.5"
+                   x-text="btResults.metrics.profit_factor.toFixed(2)"></div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+              <div class="text-[10px] text-slate-400">Max Drawdown</div>
+              <div class="text-base font-bold font-mono text-rose-400 mt-0.5">
+                ₹<span x-text="btResults.metrics.max_drawdown.toFixed(0)"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trade Log Table -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs space-y-2">
+            <div class="font-bold text-slate-200">Executed Trades (<span x-text="btResults.trades.length"></span>)</div>
+            <div class="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+              <template x-for="t in btResults.trades" :key="t.entry_time + t.symbol">
+                <div class="p-2 bg-slate-950 rounded border border-slate-800/80 flex items-center justify-between text-[11px]">
+                  <div>
+                    <div class="font-bold text-slate-200" x-text="t.symbol + ' (' + t.window + ')'"></div>
+                    <div class="text-[10px] text-slate-400 font-mono" x-text="t.entry_time"></div>
+                  </div>
+                  <div class="text-right font-mono font-bold"
+                       :class="t.net_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'">
+                    <div>₹<span x-text="t.net_pnl.toFixed(2)"></span></div>
+                    <div class="text-[9px] text-slate-400" x-text="t.exit_reason"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <!-- TAB 4: SETTINGS & TELEGRAM -->
+    <!-- ───────────────────────────────────────────────────────────── -->
+    <div x-show="activeTab === 'settings'" x-transition class="space-y-4">
+      <div>
+        <h2 class="text-base font-bold text-slate-100">Settings & Mobile Alerts</h2>
+        <p class="text-xs text-slate-400">Configure instant Telegram notifications</p>
+      </div>
+
+      <!-- Telegram Test Card -->
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3 text-xs">
+        <div class="flex items-center space-x-2 text-emerald-400 font-bold">
+          <span>📲</span>
+          <span>Instant Telegram Push Notifications</span>
+        </div>
+        <p class="text-slate-300">
+          Get real-time push notifications on your phone whenever an <b>ELITE</b> or <b>STRONG</b> setup triggers during market hours.
+        </p>
+        <button @click="testTelegram()"
+                class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 transition text-white font-bold rounded-lg flex items-center justify-center space-x-2">
+          <span>🚀 Send Test Alert to Phone</span>
+        </button>
+        <div x-show="tgMsg" class="text-center font-mono text-[11px] text-emerald-400" x-text="tgMsg"></div>
+      </div>
+
+      <!-- Connection Info -->
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2 text-xs text-slate-300">
+        <div class="font-bold text-slate-100">📱 How to Access on Mobile:</div>
+        <ol class="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
+          <li>Connect your phone to the same WiFi as this PC.</li>
+          <li>Open browser on your phone and visit:</li>
+        </ol>
+        <div class="p-2 bg-slate-950 border border-slate-800 rounded font-mono text-emerald-400 text-center font-bold text-xs select-all">
+          http://{{ local_ip }}:8000
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MOBILE BOTTOM NAVIGATION -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <nav class="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-3 py-2">
+    <div class="max-w-md mx-auto grid grid-cols-4 gap-1 text-center">
+      <button @click="activeTab = 'scanner'"
+              class="py-1.5 rounded-lg flex flex-col items-center justify-center transition"
+              :class="activeTab === 'scanner' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'">
+        <span class="text-lg">📡</span>
+        <span class="text-[10px] mt-0.5">Scanner</span>
+      </button>
+
+      <button @click="activeTab = 'global'"
+              class="py-1.5 rounded-lg flex flex-col items-center justify-center transition"
+              :class="activeTab === 'global' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'">
+        <span class="text-lg">🌍</span>
+        <span class="text-[10px] mt-0.5">Global</span>
+      </button>
+
+      <button @click="activeTab = 'backtest'"
+              class="py-1.5 rounded-lg flex flex-col items-center justify-center transition"
+              :class="activeTab === 'backtest' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'">
+        <span class="text-lg">📊</span>
+        <span class="text-[10px] mt-0.5">Backtest</span>
+      </button>
+
+      <button @click="activeTab = 'settings'"
+              class="py-1.5 rounded-lg flex flex-col items-center justify-center transition"
+              :class="activeTab === 'settings' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'">
+        <span class="text-lg">⚙️</span>
+        <span class="text-[10px] mt-0.5">Settings</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- ALPINE.JS APPLICATION SCRIPT -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <script>
+    function tradingApp() {
+      return {
+        activeTab: 'scanner',
+        status: {},
+        globalData: {},
+        fiiData: {},
+        scanData: {},
+        isScanning: false,
+        isBacktesting: false,
+        btSymbols: 'SBIN, RELIANCE, HCLTECH, INFY',
+        btCapital: 100000,
+        btResults: null,
+        tgMsg: '',
+
+        get entryStocks() {
+          return (this.scanData.stocks || []).filter(s => s.is_entry);
+        },
+
+        async init() {
+          await this.fetchStatus();
+          await this.fetchGlobal();
+          await this.fetchFII();
+          await this.fetchScan();
+
+          // Auto-refresh scan every 30 seconds
+          setInterval(() => {
+            if (this.activeTab === 'scanner') {
+              this.fetchScan(true);
+            }
+          }, 30000);
+        },
+
+        async fetchStatus() {
+          try {
+            const res = await fetch('/api/status');
+            this.status = await res.json();
+          } catch (e) {
+            console.error('Status fetch failed', e);
+          }
+        },
+
+        async fetchGlobal() {
+          try {
+            const res = await fetch('/api/global');
+            this.globalData = await res.json();
+          } catch (e) {
+            console.error('Global fetch failed', e);
+          }
+        },
+
+        async fetchFII() {
+          try {
+            const res = await fetch('/api/fii');
+            this.fiiData = await res.json();
+          } catch (e) {
+            console.error('FII fetch failed', e);
+          }
+        },
+
+        async fetchScan(silent = false) {
+          if (!silent) this.isScanning = true;
+          try {
+            const res = await fetch('/api/scan');
+            this.scanData = await res.json();
+          } catch (e) {
+            console.error('Scan fetch failed', e);
+          } finally {
+            if (!silent) this.isScanning = false;
+          }
+        },
+
+        async runBacktest() {
+          this.isBacktesting = true;
+          this.btResults = null;
+          try {
+            const syms = this.btSymbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+            const res = await fetch('/api/backtest', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                symbols: syms,
+                capital: parseFloat(this.btCapital) || 100000,
+                period: '60d'
+              })
+            });
+            this.btResults = await res.json();
+          } catch (e) {
+            alert('Backtest failed: ' + e);
+          } finally {
+            this.isBacktesting = false;
+          }
+        },
+
+        async testTelegram() {
+          this.tgMsg = 'Sending alert...';
+          try {
+            const res = await fetch('/api/telegram/test', {method: 'POST'});
+            const data = await res.json();
+            if (data.success) {
+              this.tgMsg = '✓ Test alert delivered to your Telegram!';
+            } else {
+              this.tgMsg = '⚠️ Telegram not configured yet. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env file.';
+            }
+          } catch (e) {
+            this.tgMsg = 'Error sending test alert: ' + e;
+          }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
