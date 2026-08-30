@@ -97,13 +97,20 @@ def get_local_ip() -> str:
 # REST API ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check():
+    """Health check endpoint for Render."""
+    return {"status": "ok"}
+
+
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
     """Serve mobile-optimized dashboard."""
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "local_ip": get_local_ip(),
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"local_ip": get_local_ip()},
+    )
 
 
 @app.get("/api/status")
