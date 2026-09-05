@@ -760,7 +760,7 @@ def scan_swing_candidates(capital: float = 5000) -> list:
         ema50 = compute_ema(c, 50)
         ema200 = compute_ema(c, 200)
         rsi14 = compute_rsi(c, 14)
-        atr14 = compute_atr(df.loc[c.index], 14)
+        atr14 = compute_atr(h, l, c, 14)
         avg_v = v.rolling(20).mean()
         
         c_ema20 = float(ema20.iloc[-1])
