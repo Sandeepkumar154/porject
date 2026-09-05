@@ -306,12 +306,23 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
     
     sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
     sl_risk = c_price - sl
-    t1 = c_price + (2.0 * sl_risk)
-    t2 = c_price + (3.0 * sl_risk)
+    if sl_risk <= 0:
+        sl_risk = c_price * 0.008
+        sl = c_price - sl_risk
+        
+    t1 = c_price + (1.8 * sl_risk)
+    t2 = c_price + (2.8 * sl_risk)
     
-    risk_amount = capital * RISK_PER_TRADE_PCT
-    qty = int(risk_amount / sl_risk) if sl_risk > 0 else 0
-    qty = max(0, min(qty, int((capital * 0.1) / c_price))) # Cap position size to 10% of capital
+    # Risk protection: Max risk 3% of capital (e.g. ₹150 for ₹5k capital)
+    max_risk = capital * 0.03
+    qty_by_risk = int(max_risk / sl_risk) if sl_risk > 0 else 1
+    # 5x Intraday MIS Margin limit
+    max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
+    qty = max(1, min(qty_by_risk, max_mis_qty))
+    
+    actual_risk = qty * sl_risk
+    t1_profit = qty * (t1 - c_price)
+    t2_profit = qty * (t2 - c_price)
 
     return {
         'symbol': symbol,
@@ -330,8 +341,10 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
         't1': round(float(t1), 2),
         't2': round(float(t2), 2),
         'qty': int(qty),
-        'risk_amount': round(float(risk_amount), 2),
-        'risk_pct': float(RISK_PER_TRADE_PCT * 100),
+        'risk_amount': round(float(actual_risk), 2),
+        't1_profit': round(float(t1_profit), 2),
+        't2_profit': round(float(t2_profit), 2),
+        'risk_pct': round(float((actual_risk / capital) * 100), 1),
         'shields': {k: {'passed': bool(v['passed']), 'reason': str(v['reason']), 'points': float(v['points'])} for k, v in shield_res['shields'].items()},
         'bonuses': bonuses
     }

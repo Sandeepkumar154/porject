@@ -23,7 +23,7 @@ app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
 # Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1221493262')
-TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL', '100000'))
+TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL', '5000'))
 
 # In-memory tracking of alerted signals to prevent duplicate spam
 alerted_entries_today = set()
@@ -66,8 +66,7 @@ def _send_telegram_message(text: str) -> bool:
         return False
 
 def _send_telegram_alert(entries: list):
-    """Format and send trading signal alert."""
-    today = datetime.now().strftime('%Y-%m-%d')
+    """Format and send instant, actionable intraday trading signal alert."""
     for entry in entries:
         symbol = entry.get('symbol', 'UNKNOWN')
         grade = entry.get('grade', 'NONE')
@@ -76,6 +75,10 @@ def _send_telegram_alert(entries: list):
         t1 = entry.get('t1', 0)
         t2 = entry.get('t2', 0)
         qty = entry.get('qty', 0)
+        risk_amt = entry.get('risk_amount', 0)
+        t1_profit = entry.get('t1_profit', 0)
+        t2_profit = entry.get('t2_profit', 0)
+        score = entry.get('score', 0)
         
         # Deduplication key: symbol + day + hour (max 1 alert per stock per hour)
         hour_slot = datetime.now().strftime('%Y-%m-%d %H')
@@ -85,15 +88,16 @@ def _send_telegram_alert(entries: list):
             
         alerted_entries_today.add(alert_key)
         
-        text = f"🚨 <b>INTRADAY TRADE SIGNAL: {symbol}</b>\n\n"
-        text += f"🏆 Grade: <b>{grade}</b> (High Conviction)\n"
-        text += f"📈 <b>Action: BUY @ ₹{price:.2f}</b>\n"
-        text += f"🛑 Stop Loss: ₹{sl:.2f}\n"
-        text += f"🎯 Target 1 (2:1): ₹{t1:.2f}\n"
-        text += f"🎯 Target 2 (3:1): ₹{t2:.2f}\n"
-        text += f"📦 Suggested Qty: <b>{qty} shares</b>\n\n"
-        text += f"⏰ Time: {datetime.now().strftime('%H:%M:%S IST')}\n"
-        text += f"📊 Strategy: <i>8-Shield System v2</i>"
+        text = f"⚡ <b>FAST INTRADAY CALL: {symbol}</b>\n\n"
+        text += f"🟢 <b>Action: BUY (MIS Intraday)</b>\n"
+        text += f"💰 <b>Buy Price: ₹{price:.2f}</b>\n\n"
+        text += f"🛑 <b>Strict Stop-Loss: ₹{sl:.2f}</b> (Max Risk: <b>-₹{risk_amt:.0f}</b>)\n"
+        text += f"🎯 <b>Target 1: ₹{t1:.2f}</b> (Profit: <b>+₹{t1_profit:.0f}</b>)\n"
+        text += f"🎯 <b>Target 2: ₹{t2:.2f}</b> (Profit: <b>+₹{t2_profit:.0f}</b>)\n\n"
+        text += f"📦 <b>Suggested Qty for ₹{int(TOTAL_CAPITAL)}: {qty} shares</b>\n\n"
+        text += f"🛡️ Conviction: <b>{grade}</b> ({score:.0f}/16 Shields)\n"
+        text += f"⏰ Time: {datetime.now().strftime('%H:%M:%S IST')}\n\n"
+        text += f"💡 <i>Tip: When Target 1 is hit, book 50% profit and move Stop-Loss to Buy Price for zero-risk!</i>"
         
         _send_telegram_message(text)
 
