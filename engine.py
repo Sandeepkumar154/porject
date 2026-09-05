@@ -714,3 +714,118 @@ def run_backtest(symbols: list, capital: float = 100000, period: str = '60d') ->
         'trades': all_trades
     }
 
+# 50 High-Volume, High-Momentum Indian Stocks under ₹1,500 (Ideal for ₹5,000 capital)
+SWING_WATCHLIST_50 = [
+    'TATASTEEL', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB', 'BANKBARODA', 
+    'SAIL', 'IOC', 'ONGC', 'COALINDIA', 'GAIL', 
+    'NTPC', 'POWERGRID', 'BHEL', 'PFC', 'RECLTD', 
+    'NATIONALUM', 'HINDCOPPER', 'IRFC', 'RVNL', 'HUDCO',
+    'ITC', 'WIPRO', 'SBIN', 'BEL', 'HAL', 
+    'VEDL', 'HINDALCO', 'TATACHEM', 'TATAPOWER', 'ASHOKLEY',
+    'EXIDEIND', 'AMBUJACEM', 'DLF', 'JIOFIN',
+    'HDFCBANK', 'ICICIBANK', 'AXISBANK', 'KOTAKBANK', 'BHARTIARTL',
+    'SUNPHARMA', 'CIPLA', 'APOLLOTYRE', 'TVSMOTOR', 'CUMMINSIND',
+    'VOLTAS', 'HAVELLS', 'JSWSTEEL', 'CHOLAFIN', 'INDHOTEL'
+]
+
+def scan_swing_candidates(capital: float = 5000) -> list:
+    """
+    Scans 50 high-momentum Indian stocks for daily Swing Trading setups.
+    Returns list of candidate dicts sorted by setup quality.
+    """
+    tickers = [f"{s}.NS" for s in SWING_WATCHLIST_50]
+    try:
+        raw = yf.download(tickers, period="1y", interval="1d", group_by='ticker', progress=False)
+    except Exception as e:
+        print(f"Error downloading swing data: {e}")
+        return []
+        
+    signals = []
+    
+    for s in SWING_WATCHLIST_50:
+        tk = f"{s}.NS"
+        if tk not in raw.columns.levels[0]:
+            continue
+        df = raw[tk].dropna(how='all')
+        if len(df) < 100:
+            continue
+            
+        c = df['Close'].dropna()
+        h = df['High'].loc[c.index]
+        l = df['Low'].loc[c.index]
+        v = df['Volume'].loc[c.index]
+        
+        price = float(c.iloc[-1])
+        ema20 = compute_ema(c, 20)
+        ema50 = compute_ema(c, 50)
+        ema200 = compute_ema(c, 200)
+        rsi14 = compute_rsi(c, 14)
+        atr14 = compute_atr(df.loc[c.index], 14)
+        avg_v = v.rolling(20).mean()
+        
+        c_ema20 = float(ema20.iloc[-1])
+        c_ema50 = float(ema50.iloc[-1])
+        c_ema200 = float(ema200.iloc[-1]) if len(c) >= 200 else c_ema50
+        c_rsi = float(rsi14.iloc[-1])
+        c_vol = float(v.iloc[-1])
+        c_avg_vol = float(avg_v.iloc[-1])
+        c_atr = float(atr14.iloc[-1])
+        
+        high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
+        vol_multiplier = c_vol / c_avg_vol if c_avg_vol > 0 else 1.0
+        
+        # 1. Breakout setup
+        if (price >= high_20 * 0.995 and 
+            price > c_ema50 and 
+            c_ema50 > c_ema200 and
+            52 <= c_rsi <= 72 and 
+            vol_multiplier >= 1.2):
+            
+            sl = round(price * 0.965, 2)
+            t1 = round(price * 1.06, 2)
+            t2 = round(price * 1.10, 2)
+            qty = max(1, int(capital / price))
+            
+            signals.append({
+                'symbol': s,
+                'price': round(price, 2),
+                'type': 'BREAKOUT',
+                'setup': '20-Day High Breakout + Volume Surge',
+                'rsi': round(c_rsi, 1),
+                'vol_surge': f"{vol_multiplier:.1f}x",
+                'sl': sl,
+                't1': t1,
+                't2': t2,
+                'qty': qty,
+                'score': round(vol_multiplier * 10 + (price / high_20) * 10, 1)
+            })
+            
+        # 2. Bull Trend Dip Buy
+        elif (price > c_ema200 and 
+              c_ema50 > c_ema200 and 
+              abs(price - c_ema20) / c_ema20 <= 0.02 and 
+              42 <= c_rsi <= 55):
+              
+            sl = round(price * 0.96, 2)
+            t1 = round(price * 1.05, 2)
+            t2 = round(price * 1.08, 2)
+            qty = max(1, int(capital / price))
+            
+            signals.append({
+                'symbol': s,
+                'price': round(price, 2),
+                'type': 'DIP_BUY',
+                'setup': '20 EMA Pullback Bounce (Bull Trend)',
+                'rsi': round(c_rsi, 1),
+                'vol_surge': f"{vol_multiplier:.1f}x",
+                'sl': sl,
+                't1': t1,
+                't2': t2,
+                'qty': qty,
+                'score': round(15.0 + (55 - c_rsi), 1)
+            })
+
+    signals.sort(key=lambda x: x['score'], reverse=True)
+    return signals
+
+

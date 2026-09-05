@@ -14,7 +14,8 @@ import yfinance as yf
 
 from engine import (
     scan_watchlist, scan_stock, run_backtest, get_current_window,
-    is_market_open, DEFAULT_WATCHLIST, WINDOWS
+    is_market_open, DEFAULT_WATCHLIST, WINDOWS,
+    scan_swing_candidates, SWING_WATCHLIST_50
 )
 
 app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
@@ -148,6 +149,24 @@ async def background_market_scanner():
                         "⚡ <b>Continuation Window Active (14:00 IST)</b>\n\n"
                         "Scanning for afternoon institutional continuation trends."
                     )
+
+                # 4. Daily Swing Trading Scan (15:15 IST - 15 mins before market close)
+                swing_key = f"{today_str}_SWING"
+                if swing_key not in sent_session_updates and now.hour == 15 and now.minute >= 15:
+                    sent_session_updates.add(swing_key)
+                    swing_candidates = scan_swing_candidates(TOTAL_CAPITAL)
+                    if swing_candidates:
+                        msg = "📊 <b>DAILY SWING TRADING PICKS (3:15 PM)</b>\n\n"
+                        msg += "<i>Top Daily Breakout & Dip-Buying Setups to Hold (3-10 Days):</i>\n\n"
+                        for c in swing_candidates[:4]:
+                            msg += f"🔥 <b>{c['symbol']}</b> ({c['type']})\n"
+                            msg += f"   • Price: ₹{c['price']:.2f}\n"
+                            msg += f"   • Stop-Loss: ₹{c['sl']:.2f} (-3.5%)\n"
+                            msg += f"   • Target 1: ₹{c['t1']:.2f} (+6%)\n"
+                            msg += f"   • Target 2: ₹{c['t2']:.2f} (+10%)\n"
+                            msg += f"   • Suggested Qty for ₹{int(TOTAL_CAPITAL)}: <b>{c['qty']} shares</b>\n"
+                            msg += f"   • Setup: <i>{c['setup']}</i>\n\n"
+                        _send_telegram_message(msg)
 
                 # Run live scan across watchlist
                 result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
@@ -643,6 +662,19 @@ async def run_mobile_backtest(req: BacktestRequest):
     """Execute backtest from mobile."""
     symbols = req.symbols or DEFAULT_WATCHLIST[:4]
     return run_backtest(symbols, req.capital or TOTAL_CAPITAL, req.period or '60d')
+
+@app.get('/api/swing')
+async def get_swing_signals(capital: Optional[float] = None):
+    """Scan 50 top Indian stocks for Daily Swing Trading setups."""
+    cap = capital or TOTAL_CAPITAL
+    candidates = scan_swing_candidates(cap)
+    return {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'total_scanned': len(SWING_WATCHLIST_50),
+        'capital': cap,
+        'candidates_count': len(candidates),
+        'candidates': candidates
+    }
 
 @app.post('/api/telegram/test')
 async def trigger_test_telegram():
