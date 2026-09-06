@@ -407,37 +407,25 @@ def load_tune_history() -> list:
 def generate_weekly_report(trades: list, current_perf: dict, new_perf: dict, 
                            accepted: bool, old_params: dict, new_params: dict,
                            reasons: list) -> str:
-    """Generate a formatted HTML string for Telegram weekly report."""
-    total_trades = current_perf.get('total_trades', 0)
+    """Generate a short, crisp HTML report for Telegram."""
+    total = current_perf.get('total_trades', 0)
     wins = current_perf.get('winners', 0)
-    win_rate = current_perf.get('win_rate', 0.0)
-    net_pnl = current_perf.get('net_pnl', 0.0)
+    wr = current_perf.get('win_rate', 0.0)
+    pnl = current_perf.get('net_pnl', 0.0)
     
-    report = f"📊 <b>WEEKLY BOT SELF-TUNE REPORT</b>\n\n"
-    report += f"📈 This Week: {total_trades} Trades | {wins} Wins | Win Rate: {win_rate}%\n"
-    report += f"💰 Net P&L: {'+' if net_pnl >= 0 else '-'}₹{abs(net_pnl):.2f}\n\n"
+    report = f"🔬 <b>WEEKLY TUNE</b>\n\n"
+    report += f"Trades: {total} | Wins: {wins} | WR: {wr:.0f}%\n"
+    report += f"P&L: {'+' if pnl >= 0 else ''}₹{pnl:.0f}\n\n"
     
-    report += f"🔬 Backtest Results:\n"
-    report += f"  • Current params win rate: {current_perf.get('win_rate', 0.0)}%\n"
-    report += f"  • Best tested win rate: {new_perf.get('win_rate', 0.0)}%\n\n"
-    
-    report += f"🔧 Parameter Changes:\n"
     if accepted:
+        report += "🔧 <b>Changes:</b>\n"
         for k, v in new_params.items():
             old_v = old_params.get(k, get_defaults().get(k))
             if old_v != v:
-                report += f"  • {k}: {old_v} → {v}\n"
+                report += f"  {k}: {old_v} → <b>{v}</b>\n"
+        report += "\n✅ Deployed for Monday"
     else:
-        report += f"  • No changes needed — current params are optimal\n"
-        for r in reasons:
-            report += f"    - {r}\n"
-            
-    report += f"\n🔒 Safety Limits: ALL INTACT\n\n"
-    
-    if accepted:
-        report += f"✅ Changes deployed. Bot is ready for Monday."
-    else:
-        report += f"❌ Changes not needed. Bot is ready for Monday."
+        report += "✅ No changes needed"
         
     return report
 
