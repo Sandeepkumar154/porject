@@ -69,113 +69,80 @@ def _send_telegram_message(text: str) -> bool:
         return False
 
 def _send_telegram_alert(entries: list):
-    """Format and send instant, actionable intraday trading signal alert with sentiment."""
-    # Fetch market-wide sentiment once for all entries
+    """Send short, crisp intraday trading signal."""
+    # Check VIX — block if extreme fear
     try:
         vix_data = fetch_india_vix()
         vix_can_trade = vix_data.get('can_trade', True)
-        vix_value = vix_data.get('vix_value', 0)
-        vix_label = vix_data.get('fear_level', 'NEUTRAL')
         vix_multiplier = vix_data.get('position_multiplier', 1.0)
     except Exception:
         vix_can_trade = True
-        vix_value = 0
-        vix_label = 'N/A'
         vix_multiplier = 1.0
     
-    # Block ALL trading if VIX is in extreme fear
     if not vix_can_trade:
-        _send_telegram_message(
-            "🚨 <b>TRADING BLOCKED — India VIX Too High!</b>\n\n"
-            f"😱 India VIX: <b>{vix_value:.1f}</b> ({vix_label})\n"
-            "⛔ All signals paused until VIX drops below 22.\n"
-            "🔒 Your ₹5,000 capital is protected from high-volatility chaos."
-        )
+        _send_telegram_message("🚨 <b>TRADING BLOCKED — VIX Too High</b>\n⛔ Signals paused until VIX drops below 22.")
         return
     
     for entry in entries:
         symbol = entry.get('symbol', 'UNKNOWN')
-        grade = entry.get('grade', 'NONE')
         price = entry.get('price', 0)
         sl = entry.get('sl', 0)
         t1 = entry.get('t1', 0)
         t2 = entry.get('t2', 0)
         qty = entry.get('qty', 0)
-        risk_amt = entry.get('risk_amount', 0)
-        t1_profit = entry.get('t1_profit', 0)
-        t2_profit = entry.get('t2_profit', 0)
+        grade = entry.get('grade', 'NONE')
         score = entry.get('score', 0)
+        risk_amt = entry.get('risk_amount', 0)
+        sentiment_score = 0
+        news_label = 'N/A'
+        vix_value = 0
         
         # Adjust qty if VIX suggests half position
         if vix_multiplier < 1.0:
             qty = max(1, int(qty * vix_multiplier))
-            risk_amt = risk_amt * vix_multiplier
-            t1_profit = t1_profit * vix_multiplier
-            t2_profit = t2_profit * vix_multiplier
         
-        # Deduplication key: symbol + day + hour (max 1 alert per stock per hour)
+        # Deduplication: max 1 alert per stock per hour
         hour_slot = datetime.now().strftime('%Y-%m-%d %H')
         alert_key = f"{symbol}_{hour_slot}"
         if alert_key in alerted_entries_today:
             continue
-            
         alerted_entries_today.add(alert_key)
         
-        # Fetch stock-specific news sentiment
+        # Fetch sentiment quietly for logging
         try:
             sentiment = get_market_sentiment(symbol)
-            news_label = sentiment.get('news', {}).get('sentiment_label', 'NEUTRAL')
-            news_headline = sentiment.get('news', {}).get('key_headline', '')
             sentiment_score = sentiment.get('combined_score', 0)
-            sentiment_passed = sentiment.get('sentiment_passed', True)
+            news_label = sentiment.get('news', {}).get('sentiment_label', 'N/A')
+            vix_value = sentiment.get('vix', {}).get('vix_value', 0)
         except Exception:
-            news_label = 'N/A'
-            news_headline = ''
-            sentiment_score = 0
-            sentiment_passed = True
+            pass
         
-        sentiment_emoji = "✅" if sentiment_passed else "⚠️"
-        vix_emoji = "✅" if vix_value < 18 else "⚠️"
-        
-        text = f"⚡ <b>FAST INTRADAY CALL: {symbol}</b>\n\n"
-        text += f"🟢 <b>Action: BUY (MIS Intraday)</b>\n"
-        text += f"💰 <b>Buy Price: ₹{price:.2f}</b>\n\n"
-        text += f"🛑 <b>Strict Stop-Loss: ₹{sl:.2f}</b> (Max Risk: <b>-₹{risk_amt:.0f}</b>)\n"
-        text += f"🎯 <b>Target 1: ₹{t1:.2f}</b> (Profit: <b>+₹{t1_profit:.0f}</b>)\n"
-        text += f"🎯 <b>Target 2: ₹{t2:.2f}</b> (Profit: <b>+₹{t2_profit:.0f}</b>)\n\n"
-        text += f"📦 <b>Suggested Qty for ₹{int(TOTAL_CAPITAL)}: {qty} shares</b>\n\n"
-        text += f"🛡️ Technical: <b>{grade}</b> ({score:.0f}/16 Shields)\n"
-        text += f"📰 News: <b>{news_label}</b> {sentiment_emoji}\n"
-        text += f"😱 VIX: <b>{vix_value:.1f}</b> ({vix_label}) {vix_emoji}\n"
-        if news_headline:
-            text += f"📄 <i>{news_headline[:80]}</i>\n"
-        text += f"\n⏰ Time: {datetime.now().strftime('%H:%M:%S IST')}\n\n"
-        text += f"💡 <i>Tip: When Target 1 is hit, book 50% profit and move Stop-Loss to Buy Price for zero-risk!</i>"
+        # SHORT & CRISP format
+        text = f"⚡ <b>BUY {symbol}</b> (MIS)\n\n"
+        text += f"💰 Buy: <b>₹{price:.2f}</b>\n"
+        text += f"🛑 SL: <b>₹{sl:.2f}</b>\n"
+        text += f"🎯 T1: <b>₹{t1:.2f}</b>\n"
+        text += f"🎯 T2: <b>₹{t2:.2f}</b>\n"
+        text += f"📦 Qty: <b>{qty}</b>\n"
+        text += f"🛡️ {grade} ({score:.0f}/16)"
         
         _send_telegram_message(text)
         
-        # Log the trade for the weekly self-tuner
+        # Log the trade for self-tuner (silent)
         try:
-            from self_tune import load_tuned_params as _ltp
-            params_data = _ltp()
             log_trade({
                 'symbol': symbol,
                 'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'entry_price': float(price),
-                'sl': float(sl),
-                't1': float(t1),
-                't2': float(t2),
-                'qty': int(qty),
-                'score': float(score),
-                'grade': grade,
+                'sl': float(sl), 't1': float(t1), 't2': float(t2),
+                'qty': int(qty), 'score': float(score), 'grade': grade,
                 'window': get_current_window().get('name', 'UNKNOWN'),
                 'sentiment_score': sentiment_score,
-                'news_label': news_label,
-                'vix_value': vix_value,
+                'news_label': news_label, 'vix_value': vix_value,
                 'params_version': 1
             })
-        except Exception as e:
-            print(f"Trade logging error: {e}")
+        except Exception:
+            pass
 
 # Track sent status announcements to avoid duplicate broadcasts
 sent_session_updates = set()
@@ -205,47 +172,32 @@ async def background_market_scanner():
                 open_key = f"{today_str}_OPEN"
                 if open_key not in sent_session_updates and now.hour == 9 and now.minute >= 15:
                     sent_session_updates.add(open_key)
-                    _send_telegram_message(
-                        "🔔 <b>NSE Market Open (09:15 IST)</b>\n\n"
-                        "🟢 Bot is actively monitoring the watchlist for high-conviction 8-Shield setups.\n"
-                        "🎯 Target Windows: <b>PRIME</b> (09:20-09:45) & <b>MOMENTUM</b> (10:00-12:00)."
-                    )
+                    _send_telegram_message("🟢 <b>Market Open</b> — Bot scanning 15 stocks")
 
                 # 2. Midday Dead Zone (12:00)
                 dead_key = f"{today_str}_DEADZONE"
                 if dead_key not in sent_session_updates and now.hour == 12:
                     sent_session_updates.add(dead_key)
-                    _send_telegram_message(
-                        "⏸️ <b>Midday Dead Zone (12:00 - 13:30 IST)</b>\n\n"
-                        "Low-volume chop zone active. Bot is filtering out false breakouts to protect capital.\n"
-                        "⚡ Next Trading Window: <b>CONTINUATION</b> (14:00 - 15:00)."
-                    )
+                    _send_telegram_message("⏸️ <b>Dead Zone (12-2 PM)</b> — Trading paused")
 
                 # 3. Continuation Session (14:00)
                 cont_key = f"{today_str}_CONTINUATION"
                 if cont_key not in sent_session_updates and now.hour == 14:
                     sent_session_updates.add(cont_key)
-                    _send_telegram_message(
-                        "⚡ <b>Continuation Window Active (14:00 IST)</b>\n\n"
-                        "Scanning for afternoon institutional continuation trends."
-                    )
+                    _send_telegram_message("⚡ <b>Afternoon Session Active</b> (14:00-15:00)")
 
-                # 4. Daily Swing Trading Scan (15:15 IST - 15 mins before market close)
+                # 4. Daily Swing Trading Scan (15:15 IST)
                 swing_key = f"{today_str}_SWING"
                 if swing_key not in sent_session_updates and now.hour == 15 and now.minute >= 15:
                     sent_session_updates.add(swing_key)
                     swing_candidates = scan_swing_candidates(TOTAL_CAPITAL)
                     if swing_candidates:
-                        msg = "📊 <b>DAILY SWING TRADING PICKS (3:15 PM)</b>\n\n"
-                        msg += "<i>Top Daily Breakout & Dip-Buying Setups to Hold (3-10 Days):</i>\n\n"
+                        msg = "📊 <b>SWING PICKS (3:15 PM)</b>\n\n"
                         for c in swing_candidates[:4]:
                             msg += f"🔥 <b>{c['symbol']}</b> ({c['type']})\n"
-                            msg += f"   • Price: ₹{c['price']:.2f}\n"
-                            msg += f"   • Stop-Loss: ₹{c['sl']:.2f} (-3.5%)\n"
-                            msg += f"   • Target 1: ₹{c['t1']:.2f} (+6%)\n"
-                            msg += f"   • Target 2: ₹{c['t2']:.2f} (+10%)\n"
-                            msg += f"   • Suggested Qty for ₹{int(TOTAL_CAPITAL)}: <b>{c['qty']} shares</b>\n"
-                            msg += f"   • Setup: <i>{c['setup']}</i>\n\n"
+                            msg += f"   Buy: ₹{c['price']:.2f} | SL: ₹{c['sl']:.2f}\n"
+                            msg += f"   T1: ₹{c['t1']:.2f} | T2: ₹{c['t2']:.2f}\n"
+                            msg += f"   Qty: <b>{c['qty']}</b>\n\n"
                         _send_telegram_message(msg)
 
                 # Run live scan across watchlist
@@ -260,11 +212,7 @@ async def background_market_scanner():
                 close_key = f"{today_str}_CLOSE"
                 if close_key not in sent_session_updates and (now.hour == 15 and now.minute >= 30 or now.hour > 15) and now.weekday() < 5:
                     sent_session_updates.add(close_key)
-                    _send_telegram_message(
-                        "🏁 <b>NSE Market Closed (15:30 IST)</b>\n\n"
-                        "All intraday positions auto squared-off.\n"
-                        "Bot will resume automatic scanning next trading day at 09:15 AM IST."
-                    )
+                    _send_telegram_message("🏁 <b>Market Closed</b> — Bot resumes Monday 09:15 AM")
                     
                 # Outside market hours, sleep 5 minutes
                 await asyncio.sleep(300)
