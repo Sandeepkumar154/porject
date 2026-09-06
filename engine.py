@@ -4,27 +4,63 @@ import yfinance as yf
 from datetime import datetime, time, timedelta
 import pytz
 import math
+import json
+import os
 import warnings
 warnings.filterwarnings('ignore')
 
-# 2. Configuration Constants
+# ============================================================
+# DYNAMIC PARAMETER LOADING FROM tuned_params.json
+# The auto-tuner writes optimized values here every Sunday.
+# Falls back to safe defaults if file is missing.
+# ============================================================
+def _load_tuned_params():
+    """Load tunable parameters from tuned_params.json, fall back to defaults."""
+    defaults = {
+        'ATR_SL_MULTIPLIER': 2.0,
+        'RSI_LOW': 40,
+        'RSI_HIGH': 70,
+        'ADX_MIN': 25,
+        'VWAP_BUFFER_PCT': 0.3,
+        'TRAILING_STOP_TRIGGER': 0.008,
+        'TRAILING_STOP_OFFSET': 0.004,
+        'GRADE_STRONG_MIN': 14
+    }
+    params_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tuned_params.json')
+    try:
+        with open(params_file, 'r') as f:
+            data = json.load(f)
+            loaded = data.get('params', {})
+            for key in defaults:
+                if key in loaded:
+                    defaults[key] = loaded[key]
+            print(f"[Engine] Loaded tuned params v{data.get('version', '?')} from {data.get('last_tuned', '?')}")
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        print(f"[Engine] Using default params (tuned_params.json not found or invalid: {e})")
+    return defaults
+
+_TUNED = _load_tuned_params()
+
+# 2. Configuration Constants — TUNABLE (auto-updated by self_tune.py)
+ATR_SL_MULTIPLIER = _TUNED['ATR_SL_MULTIPLIER']
+VWAP_BUFFER_PCT = _TUNED['VWAP_BUFFER_PCT']
+RSI_RANGE = (_TUNED['RSI_LOW'], _TUNED['RSI_HIGH'])
+ADX_MIN = _TUNED['ADX_MIN']
+TRAILING_STOP_TRIGGER = _TUNED['TRAILING_STOP_TRIGGER']
+TRAILING_STOP_OFFSET = _TUNED['TRAILING_STOP_OFFSET']
+
+# SAFETY CONSTANTS — PERMANENTLY HARDCODED (auto-tuner CANNOT change these)
 MIN_ENTRY_SCORE = 14
-VWAP_BUFFER_PCT = 0.3
-RSI_RANGE = (40, 70)
-ADX_MIN = 25               # Higher = stronger trend required
-ATR_SL_MULTIPLIER = 2.0    # Wider stop to avoid noise (was 1.5)
-TRAILING_STOP_TRIGGER = 0.008  # Trail after +0.8% profit
-TRAILING_STOP_OFFSET = 0.004   # Trail at +0.4% behind
 RISK_PER_TRADE_PCT = 0.005
-MACD_MANDATORY = True
+MACD_MANDATORY = True          # 🔒 LOCKED: MACD always required
 MOMENTUM_DELAY_MINUTES = 30
-MAX_TRADES_PER_DAY = 3
+MAX_TRADES_PER_DAY = 3         # 🔒 LOCKED: Max 3 trades/day
 
 SHIELD_POINTS = 2.0
 
 # Max base = 16 (8 shields x 2pts), bonuses add up to ~6 more
 GRADE_ELITE_MIN = 16    # All 8 shields pass (base=16)
-GRADE_STRONG_MIN = 14   # 7+ shields pass (base>=14) + MACD mandatory
+GRADE_STRONG_MIN = _TUNED['GRADE_STRONG_MIN']  # Auto-tunable within 12-16
 GRADE_AVERAGE_MIN = 10  # Informational only, no trade
 
 WINDOWS = {

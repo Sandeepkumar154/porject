@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "last_tuned": "2026-09-06 19:30",
+    "source": "initial_defaults",
+    "params": {
+        "ATR_SL_MULTIPLIER": 2.0,
+        "RSI_LOW": 40,
+        "RSI_HIGH": 70,
+        "ADX_MIN": 25,
+        "VWAP_BUFFER_PCT": 0.3,
+        "TRAILING_STOP_TRIGGER": 0.008,
+        "TRAILING_STOP_OFFSET": 0.004,
+        "GRADE_STRONG_MIN": 14
+    }
+}

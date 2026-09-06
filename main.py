@@ -18,6 +18,9 @@ from engine import (
     scan_swing_candidates, SWING_WATCHLIST_50
 )
 
+from self_tune import log_trade, run_weekly_tune, load_tuned_params, load_trade_log, load_tune_history
+from sentiment import get_market_sentiment, fetch_india_vix
+
 app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
 
 # Environment variables
@@ -66,7 +69,30 @@ def _send_telegram_message(text: str) -> bool:
         return False
 
 def _send_telegram_alert(entries: list):
-    """Format and send instant, actionable intraday trading signal alert."""
+    """Format and send instant, actionable intraday trading signal alert with sentiment."""
+    # Fetch market-wide sentiment once for all entries
+    try:
+        vix_data = fetch_india_vix()
+        vix_can_trade = vix_data.get('can_trade', True)
+        vix_value = vix_data.get('vix_value', 0)
+        vix_label = vix_data.get('fear_level', 'NEUTRAL')
+        vix_multiplier = vix_data.get('position_multiplier', 1.0)
+    except Exception:
+        vix_can_trade = True
+        vix_value = 0
+        vix_label = 'N/A'
+        vix_multiplier = 1.0
+    
+    # Block ALL trading if VIX is in extreme fear
+    if not vix_can_trade:
+        _send_telegram_message(
+            "🚨 <b>TRADING BLOCKED — India VIX Too High!</b>\n\n"
+            f"😱 India VIX: <b>{vix_value:.1f}</b> ({vix_label})\n"
+            "⛔ All signals paused until VIX drops below 22.\n"
+            "🔒 Your ₹5,000 capital is protected from high-volatility chaos."
+        )
+        return
+    
     for entry in entries:
         symbol = entry.get('symbol', 'UNKNOWN')
         grade = entry.get('grade', 'NONE')
@@ -80,6 +106,13 @@ def _send_telegram_alert(entries: list):
         t2_profit = entry.get('t2_profit', 0)
         score = entry.get('score', 0)
         
+        # Adjust qty if VIX suggests half position
+        if vix_multiplier < 1.0:
+            qty = max(1, int(qty * vix_multiplier))
+            risk_amt = risk_amt * vix_multiplier
+            t1_profit = t1_profit * vix_multiplier
+            t2_profit = t2_profit * vix_multiplier
+        
         # Deduplication key: symbol + day + hour (max 1 alert per stock per hour)
         hour_slot = datetime.now().strftime('%Y-%m-%d %H')
         alert_key = f"{symbol}_{hour_slot}"
@@ -88,6 +121,22 @@ def _send_telegram_alert(entries: list):
             
         alerted_entries_today.add(alert_key)
         
+        # Fetch stock-specific news sentiment
+        try:
+            sentiment = get_market_sentiment(symbol)
+            news_label = sentiment.get('news', {}).get('sentiment_label', 'NEUTRAL')
+            news_headline = sentiment.get('news', {}).get('key_headline', '')
+            sentiment_score = sentiment.get('combined_score', 0)
+            sentiment_passed = sentiment.get('sentiment_passed', True)
+        except Exception:
+            news_label = 'N/A'
+            news_headline = ''
+            sentiment_score = 0
+            sentiment_passed = True
+        
+        sentiment_emoji = "✅" if sentiment_passed else "⚠️"
+        vix_emoji = "✅" if vix_value < 18 else "⚠️"
+        
         text = f"⚡ <b>FAST INTRADAY CALL: {symbol}</b>\n\n"
         text += f"🟢 <b>Action: BUY (MIS Intraday)</b>\n"
         text += f"💰 <b>Buy Price: ₹{price:.2f}</b>\n\n"
@@ -95,11 +144,38 @@ def _send_telegram_alert(entries: list):
         text += f"🎯 <b>Target 1: ₹{t1:.2f}</b> (Profit: <b>+₹{t1_profit:.0f}</b>)\n"
         text += f"🎯 <b>Target 2: ₹{t2:.2f}</b> (Profit: <b>+₹{t2_profit:.0f}</b>)\n\n"
         text += f"📦 <b>Suggested Qty for ₹{int(TOTAL_CAPITAL)}: {qty} shares</b>\n\n"
-        text += f"🛡️ Conviction: <b>{grade}</b> ({score:.0f}/16 Shields)\n"
-        text += f"⏰ Time: {datetime.now().strftime('%H:%M:%S IST')}\n\n"
+        text += f"🛡️ Technical: <b>{grade}</b> ({score:.0f}/16 Shields)\n"
+        text += f"📰 News: <b>{news_label}</b> {sentiment_emoji}\n"
+        text += f"😱 VIX: <b>{vix_value:.1f}</b> ({vix_label}) {vix_emoji}\n"
+        if news_headline:
+            text += f"📄 <i>{news_headline[:80]}</i>\n"
+        text += f"\n⏰ Time: {datetime.now().strftime('%H:%M:%S IST')}\n\n"
         text += f"💡 <i>Tip: When Target 1 is hit, book 50% profit and move Stop-Loss to Buy Price for zero-risk!</i>"
         
         _send_telegram_message(text)
+        
+        # Log the trade for the weekly self-tuner
+        try:
+            from self_tune import load_tuned_params as _ltp
+            params_data = _ltp()
+            log_trade({
+                'symbol': symbol,
+                'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'entry_price': float(price),
+                'sl': float(sl),
+                't1': float(t1),
+                't2': float(t2),
+                'qty': int(qty),
+                'score': float(score),
+                'grade': grade,
+                'window': get_current_window().get('name', 'UNKNOWN'),
+                'sentiment_score': sentiment_score,
+                'news_label': news_label,
+                'vix_value': vix_value,
+                'params_version': 1
+            })
+        except Exception as e:
+            print(f"Trade logging error: {e}")
 
 # Track sent status announcements to avoid duplicate broadcasts
 sent_session_updates = set()
@@ -196,10 +272,61 @@ async def background_market_scanner():
             print(f"Background scanner error: {e}")
             await asyncio.sleep(60)
 
+async def weekly_self_tune():
+    """Background task: Run weekly self-tune every Sunday at 8 PM IST."""
+    print("Weekly self-tune scheduler started...")
+    
+    while True:
+        try:
+            now = datetime.now()
+            # Check if it's Sunday (weekday 6) and around 8 PM
+            if now.weekday() == 6 and now.hour == 20 and now.minute < 5:
+                print("[Self-Tune] Sunday 8 PM — Starting weekly self-tune cycle...")
+                
+                _send_telegram_message(
+                    "🔬 <b>Weekly Self-Tune Starting...</b>\n\n"
+                    "The bot is analyzing last week's trades and testing parameter optimizations.\n"
+                    "This takes 5-10 minutes. You'll receive the full report when done."
+                )
+                
+                try:
+                    # Run the full tune cycle
+                    report = run_weekly_tune(capital=TOTAL_CAPITAL)
+                    
+                    # Send the report to Telegram
+                    if report:
+                        _send_telegram_message(report)
+                    else:
+                        _send_telegram_message(
+                            "📊 <b>Weekly Self-Tune Complete</b>\n\n"
+                            "No trades logged this week. Parameters unchanged.\n"
+                            "✅ Bot is ready for Monday with current settings."
+                        )
+                    
+                    print("[Self-Tune] Weekly tune cycle complete.")
+                except Exception as e:
+                    print(f"[Self-Tune] Error during tune: {e}")
+                    _send_telegram_message(
+                        f"⚠️ <b>Self-Tune Error</b>\n\n"
+                        f"Auto-tune encountered an issue: {str(e)[:100]}\n"
+                        f"Current parameters remain unchanged. Bot is safe."
+                    )
+                
+                # Sleep 1 hour to prevent re-triggering
+                await asyncio.sleep(3600)
+            else:
+                # Check every 5 minutes
+                await asyncio.sleep(300)
+        except Exception as e:
+            print(f"Self-tune scheduler error: {e}")
+            await asyncio.sleep(300)
+
 @app.on_event("startup")
 async def startup_event():
     # Start auto-scanner in background
     asyncio.create_task(background_market_scanner())
+    # Start weekly self-tune scheduler
+    asyncio.create_task(weekly_self_tune())
 
 DASHBOARD_HTML = '''<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -686,7 +813,65 @@ async def trigger_test_telegram():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return {'success': False}
     try:
-        success = _send_telegram_message('✅ Test Alert from Master Trading v2!\n\nYour Telegram alerts are working correctly.\n🤖 You will receive ELITE & STRONG trade signals during market hours.')
+        success = _send_telegram_message('✅ Test Alert from Master Trading v2!\n\nYour Telegram alerts are working correctly.\n🤖 You will receive ELITE & STRONG trade signals during market hours.\n📰 Sentiment Analysis: Active\n🔬 Weekly Self-Tune: Active (Sundays 8 PM)')
         return {'success': success}
     except Exception:
         return {'success': False}
+
+@app.get('/api/sentiment')
+async def get_sentiment(symbol: Optional[str] = None):
+    """Get live market sentiment analysis (News + VIX + FII/DII)."""
+    try:
+        result = get_market_sentiment(symbol)
+        return result
+    except Exception as e:
+        return {'error': str(e), 'sentiment_label': 'NEUTRAL', 'can_trade': True}
+
+@app.get('/api/tune-status')
+async def get_tune_status():
+    """Get current tuned parameters, version, and tune history."""
+    try:
+        current_params = load_tuned_params()
+        history = load_tune_history()
+        return {
+            'current_params': current_params,
+            'history_count': len(history),
+            'recent_history': history[-5:] if history else [],
+            'next_tune': 'Sunday 8:00 PM IST',
+            'safety_locks': {
+                'max_risk_per_trade': '₹150 (3% of ₹5,000) — LOCKED',
+                'max_trades_per_day': '3 — LOCKED',
+                'macd_mandatory': 'True — LOCKED',
+                'dead_zone_block': '12:00-14:00 — LOCKED',
+                'stop_loss': 'Always ON — LOCKED'
+            }
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+@app.get('/api/trade-log')
+async def get_trade_log(days: Optional[int] = 7):
+    """Get logged trades for review."""
+    try:
+        trades = load_trade_log(days=days or 7)
+        from self_tune import calculate_performance
+        perf = calculate_performance(trades)
+        return {
+            'trades_count': len(trades),
+            'period_days': days,
+            'performance': perf,
+            'trades': trades[-50:]  # Last 50 trades
+        }
+    except Exception as e:
+        return {'error': str(e), 'trades': []}
+
+@app.post('/api/tune/run')
+async def manual_tune_trigger():
+    """Manually trigger a self-tune cycle (for testing)."""
+    try:
+        report = run_weekly_tune(capital=TOTAL_CAPITAL)
+        if report:
+            _send_telegram_message(report)
+        return {'success': True, 'report_sent': bool(report)}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
