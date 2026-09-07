@@ -154,10 +154,9 @@ async def background_market_scanner():
     # Send startup announcement
     _send_telegram_message(
         "🤖 <b>Groww Trading Bot Active</b>\n\n"
-        "✅ 8-Shield Scanner: <b>Online</b>\n"
-        "📈 Watchlist: 15 Top NSE Stocks\n"
-        "⏰ Automated Scanning: <b>Active (Every 60s)</b>\n\n"
-        "<i>You will receive automatic alerts for ELITE & STRONG trade signals, plus session status updates throughout market hours.</i>"
+        "✅ 9-Shield Scanner: <b>Online</b>\n"
+        "📈 Watchlist: 50 NSE Stocks\n"
+        "⏰ Scanning: <b>Every 60s</b>"
     )
     
     while True:

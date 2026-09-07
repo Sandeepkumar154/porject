@@ -70,9 +70,29 @@ WINDOWS = {
     'CONTINUATION': {'start': '14:00', 'end': '15:00', 'max_trades': 2},
 }
 
-DEFAULT_WATCHLIST = ['HDFCBANK', 'ICICIBANK', 'SBIN', 'RELIANCE', 'TCS', 
-                     'INFY', 'HCLTECH', 'WIPRO', 'AXISBANK', 'KOTAKBANK', 
-                     'BAJFINANCE', 'LT', 'HINDUNILVR', 'MARUTI', 'TATAMOTORS']
+# 50 High-Liquid NSE Stocks for Intraday Scanning
+DEFAULT_WATCHLIST = [
+    # Banking & Finance (12)
+    'HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK',
+    'BAJFINANCE', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB', 'BANKBARODA',
+    'CHOLAFIN', 'JIOFIN',
+    # IT & Tech (5)
+    'INFY', 'TCS', 'HCLTECH', 'WIPRO', 'LTIM',
+    # Metals & Mining (5)
+    'TATASTEEL', 'JSWSTEEL', 'HINDALCO', 'VEDL', 'SAIL',
+    # Energy & Power (6)
+    'RELIANCE', 'ONGC', 'NTPC', 'POWERGRID', 'TATAPOWER', 'COALINDIA',
+    # PSU & Infra (5)
+    'GAIL', 'BEL', 'HAL', 'IRFC', 'LT',
+    # Pharma & Healthcare (3)
+    'SUNPHARMA', 'CIPLA', 'APOLLOHOSP',
+    # Auto & Manufacturing (4)
+    'MARUTI', 'TVSMOTOR', 'ASHOKLEY', 'EXIDEIND',
+    # FMCG & Consumer (4)
+    'HINDUNILVR', 'ITC', 'BHARTIARTL', 'DLF',
+    # Others (6)
+    'SUZLON', 'BHEL', 'RECLTD', 'PFC', 'NATIONALUM', 'VOLTAS'
+]
 
 # 1. Technical Indicators
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:

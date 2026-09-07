@@ -10,6 +10,6 @@
         "VWAP_BUFFER_PCT": 0.3,
         "TRAILING_STOP_TRIGGER": 0.008,
         "TRAILING_STOP_OFFSET": 0.004,
-        "GRADE_STRONG_MIN": 14
+        "GRADE_STRONG_MIN": 12
     }
 }
