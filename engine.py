@@ -77,7 +77,7 @@ DEFAULT_WATCHLIST = [
     'BAJFINANCE', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB', 'BANKBARODA',
     'CHOLAFIN', 'JIOFIN',
     # IT & Tech (5)
-    'INFY', 'TCS', 'HCLTECH', 'WIPRO', 'LTIM',
+    'INFY', 'TCS', 'HCLTECH', 'WIPRO', 'TECHM',
     # Metals & Mining (5)
     'TATASTEEL', 'JSWSTEEL', 'HINDALCO', 'VEDL', 'SAIL',
     # Energy & Power (6)
