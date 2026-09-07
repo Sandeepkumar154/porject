@@ -6,11 +6,14 @@ import urllib.request
 import urllib.parse
 import ssl
 from datetime import datetime
+import pytz
 from typing import Optional, List
 from pydantic import BaseModel
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 import yfinance as yf
+
+IST = pytz.timezone('Asia/Kolkata')
 
 from engine import (
     scan_watchlist, scan_stock, run_backtest, get_current_window,
@@ -102,7 +105,7 @@ def _send_telegram_alert(entries: list):
             qty = max(1, int(qty * vix_multiplier))
         
         # Deduplication: max 1 alert per stock per hour
-        hour_slot = datetime.now().strftime('%Y-%m-%d %H')
+        hour_slot = datetime.now(IST).strftime('%Y-%m-%d %H')
         alert_key = f"{symbol}_{hour_slot}"
         if alert_key in alerted_entries_today:
             continue
@@ -132,7 +135,7 @@ def _send_telegram_alert(entries: list):
         try:
             log_trade({
                 'symbol': symbol,
-                'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'entry_time': datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
                 'entry_price': float(price),
                 'sl': float(sl), 't1': float(t1), 't2': float(t2),
                 'qty': int(qty), 'score': float(score), 'grade': grade,
@@ -161,7 +164,7 @@ async def background_market_scanner():
     
     while True:
         try:
-            now = datetime.now()
+            now = datetime.now(IST)
             today_str = now.strftime('%Y-%m-%d')
             current_time = now.time()
             
@@ -171,7 +174,7 @@ async def background_market_scanner():
                 open_key = f"{today_str}_OPEN"
                 if open_key not in sent_session_updates and now.hour == 9 and now.minute >= 15:
                     sent_session_updates.add(open_key)
-                    _send_telegram_message("🟢 <b>Market Open</b> — Bot scanning 15 stocks")
+                    _send_telegram_message("🟢 <b>Market Open</b> — Bot scanning 50 stocks")
 
                 # 2. Midday Dead Zone (12:00)
                 dead_key = f"{today_str}_DEADZONE"
@@ -225,7 +228,7 @@ async def weekly_self_tune():
     
     while True:
         try:
-            now = datetime.now()
+            now = datetime.now(IST)
             # Check if it's Sunday (weekday 6) and around 8 PM
             if now.weekday() == 6 and now.hour == 20 and now.minute < 5:
                 print("[Self-Tune] Sunday 8 PM — Starting weekly self-tune cycle...")
@@ -556,7 +559,7 @@ async def get_system_status():
     """Get system and market status."""
     window = get_current_window()
     return {
-        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'server_time': datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
         'is_market_open': is_market_open(),
         'window_name': window['name'],
         'window_active': window['active'],
@@ -747,7 +750,7 @@ async def get_swing_signals(capital: Optional[float] = None):
     cap = capital or TOTAL_CAPITAL
     candidates = scan_swing_candidates(cap)
     return {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
         'total_scanned': len(SWING_WATCHLIST_50),
         'capital': cap,
         'candidates_count': len(candidates),
