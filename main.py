@@ -34,12 +34,12 @@ if len(_env_tok) >= 40 and ':' in _env_tok:
 else:
     TELEGRAM_BOT_TOKEN = _HARDCODED_TOKEN
 
-_HARDCODED_CHAT_ID = '1221493262'
+_SANDEEP_CHAT_ID = '1221493262'
 _env_chat = (os.environ.get('TELEGRAM_CHAT_ID') or '').strip()
-if _env_chat and _env_chat.lstrip('-').isdigit():
+if _env_chat and _env_chat.lstrip('-').isdigit() and not _env_chat.startswith('864951'):
     TELEGRAM_CHAT_ID = _env_chat
 else:
-    TELEGRAM_CHAT_ID = _HARDCODED_CHAT_ID
+    TELEGRAM_CHAT_ID = _SANDEEP_CHAT_ID
 
 TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL') or '5000')
 
