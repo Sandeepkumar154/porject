@@ -1,0 +1,21 @@
+name: Keep Render Bot Awake & Scan
+
+on:
+  schedule:
+    # Mon-Fri: Run every 10 mins from 03:30 UTC to 10:30 UTC (9:00 AM to 4:00 PM IST)
+    - cron: '*/10 3-10 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Health (Keepalive)
+        run: |
+          echo "Pinging Render bot health endpoint..."
+          curl -s -f -m 45 https://groww-trading-bot-xxpk.onrender.com/health || echo "Health ping completed"
+
+      - name: Trigger 50-Stock Live Scanner
+        run: |
+          echo "Triggering 50-stock live scan..."
+          curl -s -f -m 90 https://groww-trading-bot-xxpk.onrender.com/api/scan || echo "Scan trigger completed"
