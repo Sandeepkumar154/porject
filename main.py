@@ -768,6 +768,38 @@ async def trigger_test_telegram():
     except Exception:
         return {'success': False}
 
+@app.get('/api/debug-telegram')
+async def debug_telegram():
+    token_len = len(TELEGRAM_BOT_TOKEN)
+    chat_len = len(TELEGRAM_CHAT_ID)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = urllib.parse.urlencode({
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': '🔍 Debug test from Render server',
+            'parse_mode': 'HTML'
+        }).encode('utf-8')
+        req = urllib.request.Request(url, data=data)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            res_body = response.read().decode('utf-8')
+            return {
+                'status': response.status,
+                'token_len': token_len,
+                'chat_len': chat_len,
+                'response': res_body
+            }
+    except Exception as e:
+        import traceback
+        return {
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'token_len': token_len,
+            'chat_len': chat_len
+        }
+
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):
     """Get live market sentiment analysis (News + VIX + FII/DII)."""
