@@ -26,9 +26,21 @@ from sentiment import get_market_sentiment, fetch_india_vix
 
 app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
 
-# Environment variables (use 'or' so empty strings fallback to actual credentials)
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk'
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID') or '1221493262'
+# Environment variables: rigorously validate to reject dummy/truncated tokens from Render env
+_HARDCODED_TOKEN = '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk'
+_env_tok = (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
+if len(_env_tok) >= 40 and ':' in _env_tok:
+    TELEGRAM_BOT_TOKEN = _env_tok
+else:
+    TELEGRAM_BOT_TOKEN = _HARDCODED_TOKEN
+
+_HARDCODED_CHAT_ID = '1221493262'
+_env_chat = (os.environ.get('TELEGRAM_CHAT_ID') or '').strip()
+if _env_chat and _env_chat.lstrip('-').isdigit():
+    TELEGRAM_CHAT_ID = _env_chat
+else:
+    TELEGRAM_CHAT_ID = _HARDCODED_CHAT_ID
+
 TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL') or '5000')
 
 # In-memory tracking of alerted signals to prevent duplicate spam
