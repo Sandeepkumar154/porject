@@ -73,7 +73,11 @@ def _send_telegram_message(text: str) -> bool:
             'text': text,
             'parse_mode': 'HTML'
         }).encode('utf-8')
-        req = urllib.request.Request(url, data=data)
+        req = urllib.request.Request(
+            url, 
+            data=data, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -791,7 +795,11 @@ async def debug_telegram():
             'text': '🔍 Debug test from Render server',
             'parse_mode': 'HTML'
         }).encode('utf-8')
-        req = urllib.request.Request(url, data=data)
+        req = urllib.request.Request(
+            url, 
+            data=data, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -803,6 +811,14 @@ async def debug_telegram():
                 'chat_len': chat_len,
                 'response': res_body
             }
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8')
+        return {
+            'http_code': e.code,
+            'telegram_error': err_body,
+            'token_len': token_len,
+            'chat_len': chat_len
+        }
     except Exception as e:
         import traceback
         return {
