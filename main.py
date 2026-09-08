@@ -26,10 +26,10 @@ from sentiment import get_market_sentiment, fetch_india_vix
 
 app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
 
-# Environment variables
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1221493262')
-TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL', '5000'))
+# Environment variables (use 'or' so empty strings fallback to actual credentials)
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk'
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID') or '1221493262'
+TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL') or '5000')
 
 # In-memory tracking of alerted signals to prevent duplicate spam
 alerted_entries_today = set()
@@ -65,7 +65,7 @@ def _send_telegram_message(text: str) -> bool:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx, timeout=5) as response:
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             return response.status == 200
     except Exception as e:
         print(f"Telegram error: {e}")
