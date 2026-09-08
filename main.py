@@ -230,7 +230,8 @@ async def background_market_scanner():
                 close_key = f"{today_str}_CLOSE"
                 if close_key not in sent_session_updates and (now.hour == 15 and now.minute >= 30 or now.hour > 15) and now.weekday() < 5:
                     sent_session_updates.add(close_key)
-                    _send_telegram_message("🏁 <b>Market Closed</b> — Bot resumes Monday 09:15 AM")
+                    next_day = "Monday" if now.weekday() >= 4 else "tomorrow"
+                    _send_telegram_message(f"🏁 <b>Market Closed</b> — Bot resumes {next_day} 09:15 AM")
                     
                 # Outside market hours, sleep 5 minutes
                 await asyncio.sleep(300)
