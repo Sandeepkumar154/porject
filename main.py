@@ -851,7 +851,43 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       </template>
     </div>
     <div x-show="activeTab === 'settings'" x-transition class="space-y-4">
-      <div><h2 class="text-base font-bold text-slate-100">Settings & Mobile Alerts</h2><p class="text-xs text-slate-400">Configure instant Telegram notifications</p></div>
+      <div><h2 class="text-base font-bold text-slate-100">Settings & Mobile Alerts</h2><p class="text-xs text-slate-400">Configure instant Telegram notifications & broker connection</p></div>
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3 text-xs">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2 text-emerald-400 font-bold">
+            <span>🌱</span><span>Groww Broker Integration</span>
+          </div>
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold"
+                :class="growwAccount.connected ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'">
+            <span class="inline-block w-1.5 h-1.5 rounded-full mr-1" :class="growwAccount.connected ? 'bg-emerald-400' : 'bg-rose-400'"></span>
+            <span x-text="growwAccount.connected ? 'ACTIVE' : 'DISCONNECTED'"></span>
+          </span>
+        </div>
+        <template x-if="growwAccount.connected">
+          <div class="space-y-2 pt-1">
+            <div class="grid grid-cols-2 gap-2 text-slate-300 text-[11px]">
+              <div class="bg-slate-950/60 p-2 rounded border border-slate-800">
+                <span class="text-slate-400">Account UCC:</span> <b class="text-slate-100 font-mono" x-text="growwAccount.ucc"></b>
+              </div>
+              <div class="bg-slate-950/60 p-2 rounded border border-slate-800">
+                <span class="text-slate-400">Clear Cash:</span> <b class="text-emerald-400 font-mono">₹<span x-text="(growwAccount.clear_cash || 0).toFixed(2)"></span></b>
+              </div>
+            </div>
+            <div class="flex justify-between items-center text-[11px] text-slate-400 pt-1">
+              <span>Holdings: <b class="text-slate-200" x-text="growwAccount.total_holdings_count || 0"></b> stocks</span>
+              <span>Open Positions: <b class="text-slate-200" x-text="growwAccount.open_positions_count || 0"></b></span>
+            </div>
+            <div class="text-[10px] text-emerald-400/90 font-mono">
+              ⚡ Daily 9:00 AM Auto-Refresh: Active (Zero manual login needed)
+            </div>
+          </div>
+        </template>
+        <button @click="refreshGroww()" :disabled="isRefreshingGroww" class="w-full py-2 bg-emerald-700/60 hover:bg-emerald-600 active:scale-95 transition text-white font-semibold rounded-lg flex items-center justify-center space-x-1.5 text-xs">
+          <span :class="{'animate-spin': isRefreshingGroww}">🔄</span>
+          <span x-text="isRefreshingGroww ? 'Refreshing Session...' : 'Refresh Groww Session'"></span>
+        </button>
+        <div x-show="growwMsg" class="text-center font-mono text-[10px] text-emerald-400" x-text="growwMsg"></div>
+      </div>
       <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3 text-xs">
         <div class="flex items-center space-x-2 text-emerald-400 font-bold"><span>📲</span><span>Instant Telegram Push Notifications</span></div>
         <p class="text-slate-300">Get real-time push notifications on your phone whenever an <b>ELITE</b> or <b>STRONG</b> setup triggers during market hours.</p>
@@ -882,18 +918,22 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         fiiData: {},
         scanData: {},
         positions: [],
+        growwAccount: {},
         isScanning: false,
         isBacktesting: false,
+        isRefreshingGroww: false,
         btSymbols: 'SBIN, RELIANCE, HCLTECH, INFY',
         btCapital: 100000,
         btResults: null,
         tgMsg: '',
+        growwMsg: '',
         get entryStocks() { return (this.scanData.stocks || []).filter(s => s.is_entry); },
         async init() {
           await this.fetchStatus();
           await this.fetchGlobal();
           await this.fetchFII();
           await this.fetchPositions();
+          await this.fetchGrowwAccount();
           await this.fetchScan();
           setInterval(() => { if (this.activeTab === 'scanner') { this.fetchScan(true); this.fetchPositions(); } }, 30000);
         },
@@ -901,6 +941,8 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         async fetchGlobal() { try { const r = await fetch('/api/global'); this.globalData = await r.json(); } catch(e) { console.error('Global fetch failed', e); } },
         async fetchFII() { try { const r = await fetch('/api/fii'); this.fiiData = await r.json(); } catch(e) { console.error('FII fetch failed', e); } },
         async fetchPositions() { try { const r = await fetch('/api/positions'); const d = await r.json(); this.positions = d.positions || []; } catch(e) { console.error('Positions fetch failed', e); } },
+        async fetchGrowwAccount() { try { const r = await fetch('/api/groww/account'); this.growwAccount = await r.json(); } catch(e) { console.error('Groww account fetch failed', e); } },
+        async refreshGroww() { this.isRefreshingGroww = true; this.growwMsg = ''; try { const r = await fetch('/api/groww/refresh', {method: 'POST'}); const d = await r.json(); if(d.success) { this.growwMsg = '✓ Session refreshed!'; await this.fetchGrowwAccount(); } else { this.growwMsg = 'Error: ' + (d.message || 'Failed'); } } catch(e) { this.growwMsg = 'Failed: ' + e; } finally { this.isRefreshingGroww = false; } },
         async fetchScan(silent=false) { if(!silent) this.isScanning=true; try { const r = await fetch('/api/scan'); this.scanData = await r.json(); await this.fetchPositions(); } catch(e) { console.error('Scan fetch failed', e); } finally { if(!silent) this.isScanning=false; } },
         async runBacktest() { this.isBacktesting=true; this.btResults=null; try { const syms=this.btSymbols.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean); const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:syms,capital:parseFloat(this.btCapital)||100000,period:'60d'})}); this.btResults=await r.json(); } catch(e) { alert('Backtest failed: '+e); } finally { this.isBacktesting=false; } },
         async testTelegram() { this.tgMsg='Sending alert...'; try { const r=await fetch('/api/telegram/test',{method:'POST'}); const d=await r.json(); if(d.success){this.tgMsg='✓ Test alert delivered to your Telegram!';}else{this.tgMsg='⚠️ Telegram not configured yet. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env file.';} } catch(e) { this.tgMsg='Error sending test alert: '+e; } }
@@ -1097,6 +1139,12 @@ async def get_fii_dii():
 @app.get('/api/scan')
 async def run_live_scan(symbols: Optional[str] = None):
     """Run real-time 8-shield scan on watchlist."""
+    try:
+        from groww_manager import ensure_daily_token
+        ensure_daily_token()
+    except Exception:
+        pass
+
     sym_list = [s.strip().upper() for s in symbols.split(',')] if symbols else DEFAULT_WATCHLIST
     result = scan_watchlist(sym_list, TOTAL_CAPITAL)
     stocks = result.get('stocks', [])
@@ -1186,6 +1234,25 @@ async def update_groww_token(token: Optional[str] = None):
         'has_token': bool(current_token),
         'token_preview': (current_token[:6] + '...' + current_token[-4:]) if current_token else None
     }
+
+@app.get('/api/groww/account')
+async def get_groww_account():
+    """Get live Groww account status, UCC, cash balance, holdings, and positions."""
+    try:
+        from groww_manager import get_account_summary, ensure_daily_token
+        ensure_daily_token()
+        return get_account_summary()
+    except Exception as e:
+        return {'connected': False, 'error': str(e)}
+
+@app.post('/api/groww/refresh')
+async def refresh_groww_session():
+    """Force generate a fresh Groww session access token."""
+    try:
+        from groww_manager import refresh_groww_token
+        return refresh_groww_token()
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):

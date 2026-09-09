@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 backtest_trades.csv
+groww_token.json
+groww_credentials.json
