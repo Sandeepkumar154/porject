@@ -18,7 +18,8 @@ IST = pytz.timezone('Asia/Kolkata')
 from engine import (
     scan_watchlist, scan_stock, run_backtest, get_current_window,
     is_market_open, DEFAULT_WATCHLIST, WINDOWS,
-    scan_swing_candidates, SWING_WATCHLIST_50
+    scan_swing_candidates, SWING_WATCHLIST_50,
+    check_nifty_regime
 )
 
 from self_tune import log_trade, run_weekly_tune, load_tuned_params, load_trade_log, load_tune_history
@@ -103,7 +104,7 @@ active_positions = _load_active_positions()
 # User Capital: ₹5,000 | Max Risk: ₹150
 # ============================================================
 MAX_ACTIVE_POSITIONS = 1      # Only 1 trade at a time for ₹5,000 capital (no simultaneous clutter)
-MAX_DAILY_TRADES = 2          # Maximum 2 intraday calls per day total (prevents overtrading & notification fatigue)
+MAX_DAILY_TRADES = 1          # Strictly maximum 1 intraday call per day (prevents overtrading & fee drag)
 MIN_COOLDOWN_MINUTES = 30     # 30-minute quiet period between signals
 last_alert_time = None
 
@@ -224,19 +225,27 @@ def _send_telegram_alert(entries: list):
         
     t1_profit = round(qty * (t1 - price), 0)
     t2_profit = round(qty * (t2 - price), 0)
+    net_t2_profit = round(best_entry.get('net_t2_profit', t2_profit - 40.0), 0)
+    orb_high = best_entry.get('orb_high', price)
+    risk_amt = round(best_entry.get('risk_amount', qty * (price - sl)), 0)
+    
+    nifty_info = check_nifty_regime()
+    nifty_desc = nifty_info.get('description', 'Bullish Above VWAP')
         
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
     
-    # SHORT, CRISP format with Profit Target
-    text = f"⚡ <b>BUY {symbol}</b> (MIS)\n\n"
-    text += f"💰 Buy: <b>₹{price:.2f}</b>\n"
-    text += f"🛑 SL: <b>₹{sl:.2f}</b>\n"
-    text += f"🎯 T1: <b>₹{t1:.2f}</b> (+₹{t1_profit:.0f})\n"
-    text += f"🎯 T2: <b>₹{t2:.2f}</b> (+₹{t2_profit:.0f})\n"
-    text += f"📦 Qty: <b>{qty}</b>\n"
-    text += f"💵 <b>Target Profit: +₹{t2_profit:.0f}</b>\n"
-    text += f"🛡️ {grade} ({score:.0f}/16)"
+    # INSTITUTIONAL 360-DEGREE FORMAT
+    text = f"⚡ <b>BUY {symbol}</b> (MIS Intraday)\n\n"
+    text += f"🌍 <b>Nifty 50:</b> {nifty_desc}\n"
+    text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n\n"
+    text += f"💰 Buy Price: <b>₹{price:.2f}</b>\n"
+    text += f"🛑 Stop-Loss: <b>₹{sl:.2f}</b> (Risk: ₹{risk_amt:.0f})\n"
+    text += f"🎯 Target 1: <b>₹{t1:.2f}</b> (+₹{t1_profit:.0f})\n"
+    text += f"🎯 Target 2: <b>₹{t2:.2f}</b> (+₹{t2_profit:.0f})\n"
+    text += f"📦 Quantity: <b>{qty} shares</b> (5x MIS)\n\n"
+    text += f"💵 <b>Net Target Profit: +₹{net_t2_profit:.0f}</b> (After ₹40 brokerage)\n"
+    text += f"🛡️ Grade: <b>{grade}</b> ({score:.0f}/16)"
     
     _send_telegram_message(text)
     last_alert_time = now
@@ -968,13 +977,20 @@ async def serve_dashboard():
 async def get_system_status():
     """Get system and market status."""
     window = get_current_window()
+    nifty = check_nifty_regime()
     return {
         'server_time': datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
         'is_market_open': is_market_open(),
         'window_name': window['name'],
         'window_active': window['active'],
         'window_number': window['number'],
-        'max_trades': window['max_trades'],
+        'max_trades': MAX_DAILY_TRADES,
+        'daily_trades_taken': len(alerted_entries_today),
+        'active_positions_count': len(active_positions),
+        'nifty_regime': nifty.get('regime', 'UNKNOWN'),
+        'nifty_change': nifty.get('today_gain', 0.0),
+        'nifty_description': nifty.get('description', ''),
+        'nifty_can_long': nifty.get('can_long', False),
         'total_capital': TOTAL_CAPITAL,
         'local_ip': _get_local_ip()
     }
@@ -1286,7 +1302,7 @@ async def get_tune_status():
             'next_tune': 'Sunday 8:00 PM IST',
             'safety_locks': {
                 'max_risk_per_trade': '₹150 (3% of ₹5,000) — LOCKED',
-                'max_trades_per_day': '3 — LOCKED',
+                'max_trades_per_day': '1 — LOCKED',
                 'macd_mandatory': 'True — LOCKED',
                 'dead_zone_block': '12:00-14:00 — LOCKED',
                 'stop_loss': 'Always ON — LOCKED'

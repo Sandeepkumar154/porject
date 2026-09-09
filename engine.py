@@ -268,11 +268,15 @@ def evaluate_shields(price, vwap, rsi, adx, macd_hist, bb_upper, bb_lower, super
         'mandatory_passed': mandatory_passed
     }
 
-def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "15m") -> pd.DataFrame:
     """Fetch OHLCV directly from Yahoo v8 chart API with browser headers (immune to cloud blocking)."""
-    import urllib.request, json, ssl
-    clean_sym = symbol.replace('.NS', '')
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}.NS?interval={interval}&range={period}"
+    import urllib.request, json, ssl, urllib.parse
+    if symbol.startswith('^'):
+        tk = urllib.parse.quote(symbol)
+    else:
+        clean_sym = symbol.replace('.NS', '')
+        tk = f"{clean_sym}.NS"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{tk}?interval={interval}&range={period}"
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -297,34 +301,109 @@ def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "5m
                 'Close': quote.get('close'),
                 'Volume': quote.get('volume')
             }, index=pd.to_datetime(timestamps, unit='s')).dropna()
-            return df if len(df) >= 20 else None
+            return df if len(df) >= 12 else None
     except Exception:
         return None
 
-# 4. Stock Scanner
-def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False, df: pd.DataFrame = None) -> dict:
-    if df is None:
-        # Tier 1: Try Groww API first if token is active
-        try:
-            from groww_manager import fetch_groww_candles
-            df = fetch_groww_candles(symbol, interval="5m")
-        except Exception:
-            df = None
+def check_nifty_regime() -> dict:
+    """
+    Evaluates Nifty 50 Market Direction on 15m timeframe:
+    1. Checks if Nifty is above/below its intraday VWAP.
+    2. Checks if Nifty is green or red today.
+    Blocks Long entries if Nifty is falling/bearish/choppy.
+    """
+    try:
+        df = fetch_stock_data_direct('^NSEI', period='5d', interval='15m')
+        if df is None or len(df) < 10:
+            return {
+                'regime': 'NEUTRAL',
+                'price': 0.0,
+                'vwap': 0.0,
+                'today_gain': 0.0,
+                'can_long': True,
+                'can_short': False,
+                'description': 'Nifty data unavailable — Neutral'
+            }
             
-        # Tier 2: Seamless fallback to direct NSE institutional feed
+        close = df['Close'].squeeze()
+        high = df['High'].squeeze()
+        low = df['Low'].squeeze()
+        vol = df['Volume'].squeeze()
+        ts = pd.Series(df.index, index=df.index)
+        vwap_series = compute_vwap(high, low, close, vol, ts)
+        
+        current_p = float(close.iloc[-1].item() if hasattr(close.iloc[-1], 'item') else close.iloc[-1])
+        last_vwap = vwap_series.iloc[-1]
+        current_vwap = float(last_vwap.item() if hasattr(last_vwap, 'item') else last_vwap) if not pd.isna(last_vwap) else current_p
+        
+        df['date'] = df.index.date
+        today_date = df['date'].iloc[-1]
+        today_df = df[df['date'] == today_date]
+        first_open = today_df['Open'].iloc[0] if not today_df.empty else current_p
+        today_open = float(first_open.item() if hasattr(first_open, 'item') else first_open)
+        today_gain = ((current_p - today_open) / today_open) * 100.0 if today_open > 0 else 0.0
+        
+        # Strict Bullish: Above VWAP and gain >= +0.05%
+        if current_p >= current_vwap and today_gain >= 0.05:
+            regime = 'BULLISH'
+            can_long = True
+            can_short = False
+            desc = f"Nifty Bullish (+{today_gain:.2f}%) Above VWAP"
+        elif current_p < current_vwap and today_gain <= -0.05:
+            regime = 'BEARISH'
+            can_long = False
+            can_short = True
+            desc = f"Nifty Bearish ({today_gain:.2f}%) Below VWAP"
+        else:
+            regime = 'CHOPPY'
+            can_long = False
+            can_short = False
+            desc = f"Nifty Choppy ({today_gain:+.2f}%) — Flat"
+            
+        return {
+            'regime': regime,
+            'price': round(current_p, 2),
+            'vwap': round(current_vwap, 2),
+            'today_gain': round(today_gain, 2),
+            'can_long': can_long,
+            'can_short': can_short,
+            'description': desc
+        }
+    except Exception as e:
+        return {
+            'regime': 'NEUTRAL',
+            'price': 0.0,
+            'vwap': 0.0,
+            'today_gain': 0.0,
+            'can_long': True,
+            'can_short': False,
+            'description': f"Nifty fallback: {str(e)}"
+        }
+
+# 4. Stock Scanner
+def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, df: pd.DataFrame = None, nifty_regime: dict = None) -> dict:
+    if df is None:
+        # Tier 1: Direct NSE institutional feed (15m candles)
+        df = fetch_stock_data_direct(symbol, period="5d", interval="15m")
+            
+        # Tier 2: Groww API fallback
         if df is None or df.empty:
-            df = fetch_stock_data_direct(symbol, period="5d", interval="5m")
+            try:
+                from groww_manager import fetch_groww_candles
+                df = fetch_groww_candles(symbol, interval="15m")
+            except Exception:
+                df = None
             
         # Tier 3: Emergency fallback
         if df is None or df.empty:
             try:
-                df = yf.download(f"{symbol}.NS", period="5d", interval="5m", progress=False)
+                df = yf.download(f"{symbol}.NS", period="5d", interval="15m", progress=False)
                 if df.empty:
                     return None
             except Exception:
                 return None
 
-    if len(df) < 20:
+    if len(df) < 15:
         return None
         
     # Compute indicators
@@ -353,20 +432,20 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
 
     # Get latest
     latest = -1
-    c_price = close.iloc[latest]
-    c_vwap = vwap.iloc[latest]
-    c_rsi = rsi.iloc[latest]
-    c_adx = adx.iloc[latest]
-    c_macd_hist = macd_hist.iloc[latest]
-    c_bb_upper = bb_upper.iloc[latest]
-    c_bb_lower = bb_lower.iloc[latest]
-    c_st_dir = st_dir.iloc[latest]
-    c_ema9 = ema9.iloc[latest]
-    c_ema21 = ema21.iloc[latest]
-    c_ema50 = ema50.iloc[latest]
-    c_vol = volume.iloc[latest]
-    c_avg_vol = avg_volume.iloc[latest]
-    c_atr = atr.iloc[latest]
+    c_price = float(close.iloc[latest].item() if hasattr(close.iloc[latest], 'item') else close.iloc[latest])
+    c_vwap = float(vwap.iloc[latest].item() if hasattr(vwap.iloc[latest], 'item') else vwap.iloc[latest])
+    c_rsi = float(rsi.iloc[latest].item() if hasattr(rsi.iloc[latest], 'item') else rsi.iloc[latest])
+    c_adx = float(adx.iloc[latest].item() if hasattr(adx.iloc[latest], 'item') else adx.iloc[latest])
+    c_macd_hist = float(macd_hist.iloc[latest].item() if hasattr(macd_hist.iloc[latest], 'item') else macd_hist.iloc[latest])
+    c_bb_upper = float(bb_upper.iloc[latest].item() if hasattr(bb_upper.iloc[latest], 'item') else bb_upper.iloc[latest])
+    c_bb_lower = float(bb_lower.iloc[latest].item() if hasattr(bb_lower.iloc[latest], 'item') else bb_lower.iloc[latest])
+    c_st_dir = int(st_dir.iloc[latest].item() if hasattr(st_dir.iloc[latest], 'item') else st_dir.iloc[latest])
+    c_ema9 = float(ema9.iloc[latest].item() if hasattr(ema9.iloc[latest], 'item') else ema9.iloc[latest])
+    c_ema21 = float(ema21.iloc[latest].item() if hasattr(ema21.iloc[latest], 'item') else ema21.iloc[latest])
+    c_ema50 = float(ema50.iloc[latest].item() if hasattr(ema50.iloc[latest], 'item') else ema50.iloc[latest])
+    c_vol = float(volume.iloc[latest].item() if hasattr(volume.iloc[latest], 'item') else volume.iloc[latest])
+    c_avg_vol = float(avg_volume.iloc[latest].item() if hasattr(avg_volume.iloc[latest], 'item') else avg_volume.iloc[latest])
+    c_atr = float(atr.iloc[latest].item() if hasattr(atr.iloc[latest], 'item') else atr.iloc[latest])
 
     shield_res = evaluate_shields(
         c_price, c_vwap, c_rsi, c_adx, c_macd_hist, c_bb_upper, c_bb_lower,
@@ -381,32 +460,34 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
     if c_vol >= 3 * c_avg_vol:
         bonus_score += 4
         bonuses.append("Mega Volume")
-    elif c_vol >= 2 * c_avg_vol:
+    elif c_vol >= 1.8 * c_avg_vol:
         bonus_score += 2
         bonuses.append("High Volume")
         
-    if c_rsi >= 60:
+    if c_rsi >= 58:
         bonus_score += 2
         bonuses.append("Strong Momentum")
 
     total_score = base_score + bonus_score
-    
     passed_shields_count = sum(1 for s in shield_res['shields'].values() if s['passed'])
 
-    # Grading logic — STRICT: Only allow entries with score 15 or 16
-    grade = 'SKIP'
-    is_entry = False
+    # 15-Minute Opening Range (ORB) calculation
+    df['date'] = df.index.date
+    today_date = df['date'].iloc[-1]
+    today_candles = df[df['date'] == today_date]
     
-    if base_score >= 16 and shield_res['all_passed']:
-        grade = 'ELITE'
-        is_entry = True
-    elif (base_score >= 15 or (total_score >= 15 and passed_shields_count >= 7)) and shield_res['mandatory_passed']:
-        grade = 'STRONG'
-        is_entry = True
-    elif total_score >= GRADE_AVERAGE_MIN:
-        grade = 'AVERAGE'
-        is_entry = False
+    orb_high = 0.0
+    orb_low = 0.0
+    orb_breakout = False
     
+    if len(today_candles) >= 2:
+        first_candle = today_candles.iloc[0]
+        orb_high = float(first_candle['High'].item() if hasattr(first_candle['High'], 'item') else first_candle['High'])
+        orb_low = float(first_candle['Low'].item() if hasattr(first_candle['Low'], 'item') else first_candle['Low'])
+        if c_price > orb_high:
+            orb_breakout = True
+
+    # Stop-loss and Target calculation
     sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
     sl_risk = c_price - sl
     if sl_risk <= 0:
@@ -416,16 +497,46 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
     t1 = c_price + (1.8 * sl_risk)
     t2 = c_price + (3.0 * sl_risk)
     
-    # Risk protection: Max risk 3% of capital (e.g. ₹150 for ₹5k capital)
-    max_risk = capital * 0.03
+    # MIS 5x Sizing for ₹5,000 capital (Anti-Brokerage Sizing)
+    max_risk = min(150.0, capital * 0.03)
     qty_by_risk = int(max_risk / sl_risk) if sl_risk > 0 else 1
-    # 5x Intraday MIS Margin limit
     max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
     qty = max(1, min(qty_by_risk, max_mis_qty))
     
     actual_risk = qty * sl_risk
     t1_profit = qty * (t1 - c_price)
     t2_profit = qty * (t2 - c_price)
+
+    # Grading logic — STRICT ELITE RULES
+    grade = 'SKIP'
+    is_entry = False
+    
+    if base_score >= 15 or (total_score >= 15 and passed_shields_count >= 7):
+        if shield_res['mandatory_passed']:
+            is_entry = True
+            grade = 'ELITE' if base_score >= 16 else 'STRONG'
+    elif total_score >= GRADE_AVERAGE_MIN:
+        grade = 'AVERAGE'
+        is_entry = False
+
+    # 360-DEGREE TOP TRADER SAFETY GATES
+    if nifty_regime is None:
+        nifty_regime = check_nifty_regime()
+        
+    # Gate 1: Market Regime (Do not buy in falling or choppy markets)
+    if is_entry and not nifty_regime.get('can_long', False):
+        is_entry = False
+        grade = f"WAIT ({nifty_regime.get('regime', 'CHOPPY')} Mkt)"
+        
+    # Gate 2: 15-Minute ORB Breakout Confirmation
+    if is_entry and not orb_breakout:
+        is_entry = False
+        grade = "WATCH (<15m High)"
+        
+    # Gate 3: Anti-Brokerage Sizing (Projected T2 Profit must be >= ₹250)
+    if is_entry and t2_profit < 250.0:
+        is_entry = False
+        grade = "SKIP (Low Profit vs Fees)"
 
     return {
         'symbol': symbol,
@@ -444,30 +555,30 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
         't1': round(float(t1), 2),
         't2': round(float(t2), 2),
         'qty': int(qty),
+        'orb_high': round(float(orb_high), 2),
+        'orb_breakout': bool(orb_breakout),
         'risk_amount': round(float(actual_risk), 2),
         't1_profit': round(float(t1_profit), 2),
         't2_profit': round(float(t2_profit), 2),
+        'net_t2_profit': round(float(t2_profit - 40.0), 2),
         'risk_pct': round(float((actual_risk / capital) * 100), 1),
         'shields': {k: {'passed': bool(v['passed']), 'reason': str(v['reason']), 'points': float(v['points'])} for k, v in shield_res['shields'].items()},
         'bonuses': bonuses
     }
 
-def scan_watchlist(symbols: list, capital: float = 100000) -> dict:
+def scan_watchlist(symbols: list, capital: float = 5000) -> dict:
     from concurrent.futures import ThreadPoolExecutor
+    
+    # 1. Evaluate Nifty 50 regime once for all stocks
+    nifty_info = check_nifty_regime()
+    
+    # 2. Parallel scan of stocks with Nifty regime passed
     stocks_res = []
     with ThreadPoolExecutor(max_workers=10) as ex:
-        results = list(ex.map(lambda s: scan_stock(s, capital), symbols))
+        results = list(ex.map(lambda s: scan_stock(s, capital, nifty_regime=nifty_info), symbols))
     stocks_res = [r for r in results if r is not None]
     stocks_res.sort(key=lambda x: (x.get('is_entry', False), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
-    
-    # Nifty proxy
-    nifty = scan_stock('^NSEI', capital) if '^NSEI' in symbols else None
-    nifty_dir = "NEUTRAL"
-    nifty_change = 0.0
-    if nifty:
-        nifty_dir = "BULLISH" if nifty['price'] > nifty['vwap'] else "BEARISH"
 
-    # Time and window
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
     window = get_current_window()
@@ -475,11 +586,13 @@ def scan_watchlist(symbols: list, capital: float = 100000) -> dict:
     return {
         'timestamp': now.strftime("%Y-%m-%d %H:%M:%S"),
         'window': window['name'] if window else "OUTSIDE_HOURS",
-        'nifty_change': nifty_change,
-        'nifty_direction': nifty_dir,
-        'global_score': len([s for s in stocks_res if s['is_entry']]),
+        'nifty_regime': nifty_info.get('regime', 'NEUTRAL'),
+        'nifty_change': nifty_info.get('today_gain', 0.0),
+        'nifty_direction': nifty_info.get('description', 'Neutral'),
+        'global_score': len([s for s in stocks_res if s.get('is_entry')]),
         'stocks': stocks_res
     }
+
 
 # 5. Trading Window Logic
 def get_current_window() -> dict:
