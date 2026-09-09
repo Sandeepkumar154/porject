@@ -2,8 +2,8 @@ name: Keep Render Bot Awake & Scan
 
 on:
   schedule:
-    # Mon-Fri: Run every 10 mins from 03:30 UTC to 10:30 UTC (9:00 AM to 4:00 PM IST)
-    - cron: '*/10 3-10 * * 1-5'
+    # Run every 5 minutes 24/7 so Render free tier NEVER sleeps
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:

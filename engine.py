@@ -268,17 +268,52 @@ def evaluate_shields(price, vwap, rsi, adx, macd_hist, bb_upper, bb_lower, super
         'mandatory_passed': mandatory_passed
     }
 
+def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+    """Fetch OHLCV directly from Yahoo v8 chart API with browser headers (immune to cloud blocking)."""
+    import urllib.request, json, ssl
+    clean_sym = symbol.replace('.NS', '')
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}.NS?interval={interval}&range={period}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=6) as res:
+            d = json.loads(res.read().decode('utf-8'))
+            res_list = d.get('chart', {}).get('result')
+            if not res_list:
+                return None
+            res_obj = res_list[0]
+            timestamps = res_obj.get('timestamp')
+            indicators = res_obj.get('indicators', {})
+            quote_list = indicators.get('quote')
+            if not timestamps or not quote_list:
+                return None
+            quote = quote_list[0]
+            df = pd.DataFrame({
+                'Open': quote.get('open'),
+                'High': quote.get('high'),
+                'Low': quote.get('low'),
+                'Close': quote.get('close'),
+                'Volume': quote.get('volume')
+            }, index=pd.to_datetime(timestamps, unit='s')).dropna()
+            return df if len(df) >= 20 else None
+    except Exception:
+        return None
+
 # 4. Stock Scanner
 def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False, df: pd.DataFrame = None) -> dict:
     if df is None:
-        try:
-            df = yf.download(f"{symbol}.NS", period="5d", interval="5m")
-            if df.empty:
+        df = fetch_stock_data_direct(symbol, period="5d", interval="5m")
+        if df is None or df.empty:
+            try:
+                df = yf.download(f"{symbol}.NS", period="5d", interval="5m", progress=False)
+                if df.empty:
+                    return None
+            except Exception:
                 return None
-        except:
-            return None
 
-    if len(df) < 50:
+    if len(df) < 20:
         return None
         
     # Compute indicators
@@ -406,12 +441,11 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
     }
 
 def scan_watchlist(symbols: list, capital: float = 100000) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
     stocks_res = []
-    for sym in symbols:
-        res = scan_stock(sym, capital)
-        if res:
-            stocks_res.append(res)
-            
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        results = list(ex.map(lambda s: scan_stock(s, capital), symbols))
+    stocks_res = [r for r in results if r is not None]
     stocks_res.sort(key=lambda x: x['score'], reverse=True)
     
     # Nifty proxy
@@ -802,21 +836,15 @@ def scan_swing_candidates(capital: float = 5000) -> list:
     Scans 50 high-momentum Indian stocks for daily Swing Trading setups.
     Returns list of candidate dicts sorted by setup quality.
     """
-    tickers = [f"{s}.NS" for s in SWING_WATCHLIST_50]
-    try:
-        raw = yf.download(tickers, period="1y", interval="1d", group_by='ticker', progress=False)
-    except Exception as e:
-        print(f"Error downloading swing data: {e}")
-        return []
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        stock_dfs = dict(ex.map(lambda s: (s, fetch_stock_data_direct(s, "1y", "1d")), SWING_WATCHLIST_50))
         
     signals = []
     
     for s in SWING_WATCHLIST_50:
-        tk = f"{s}.NS"
-        if tk not in raw.columns.levels[0]:
-            continue
-        df = raw[tk].dropna(how='all')
-        if len(df) < 100:
+        df = stock_dfs.get(s)
+        if df is None or len(df) < 50:
             continue
             
         c = df['Close'].dropna()
