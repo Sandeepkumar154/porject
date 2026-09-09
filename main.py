@@ -981,11 +981,16 @@ async def get_system_status():
 
 def get_yfinance_change(ticker: str) -> float:
     try:
-        data = yf.Ticker(ticker).history(period="5d")
-        if len(data) >= 2:
-            prev_close = data['Close'].iloc[-2]
-            last_close = data['Close'].iloc[-1]
-            return ((last_close - prev_close) / prev_close) * 100.0
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?range=5d&interval=1d"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res = json.loads(response.read().decode('utf-8'))
+            closes = [c for c in res['chart']['result'][0]['indicators']['quote'][0]['close'] if c is not None]
+            if len(closes) >= 2:
+                return ((closes[-1] - closes[-2]) / closes[-2]) * 100.0
         return 0.0
     except Exception:
         return 0.0
@@ -996,10 +1001,15 @@ async def get_global_check():
     try:
         # Gift Nifty approximation using ^NSEI
         try:
-            nifty_data = yf.Ticker("^NSEI").history(period="2d")
-            gift_nifty_gap = nifty_data['Close'].iloc[-1] - nifty_data['Close'].iloc[-2] if len(nifty_data) >= 2 else 0.0
-        except:
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?range=5d&interval=1d"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                res = json.loads(response.read().decode('utf-8'))
+                closes = [c for c in res['chart']['result'][0]['indicators']['quote'][0]['close'] if c is not None]
+                gift_nifty_gap = closes[-1] - closes[-2] if len(closes) >= 2 else 0.0
+        except Exception:
             gift_nifty_gap = 0.0
+
             
         us_dow_change = get_yfinance_change("^DJI")
         us_nasdaq_change = get_yfinance_change("^IXIC")

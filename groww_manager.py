@@ -108,8 +108,12 @@ def ensure_daily_token() -> bool:
     res = refresh_groww_token()
     return res.get("success", False)
 
+_cached_client = None
+_cached_token = None
+
 def get_groww_client():
     """Get an authenticated GrowwAPI instance. Refreshes token if needed."""
+    global _cached_client, _cached_token
     token = get_groww_token()
     if not token:
         res = refresh_groww_token()
@@ -119,12 +123,18 @@ def get_groww_client():
     if not token:
         return None
         
+    if _cached_client is not None and _cached_token == token:
+        return _cached_client
+
     try:
         from growwapi import GrowwAPI
-        return GrowwAPI(token)
+        _cached_client = GrowwAPI(token)
+        _cached_token = token
+        return _cached_client
     except Exception as e:
         print(f"Error creating Groww client: {e}")
         return None
+
 
 def get_account_summary() -> Dict[str, Any]:
     """
