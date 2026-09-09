@@ -507,6 +507,17 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     t1_profit = qty * (t1 - c_price)
     t2_profit = qty * (t2 - c_price)
 
+    # Relative Volume (RVOL) calculation
+    rvol = round(float(c_vol / c_avg_vol), 2) if c_avg_vol > 0 else 1.0
+    if rvol >= 3.0:
+        vol_label = "EXTREME SURGE 🔥"
+    elif rvol >= 2.0:
+        vol_label = "INSTITUTIONAL SPIKE ⚡"
+    elif rvol >= 1.5:
+        vol_label = "HEALTHY VOLUME"
+    else:
+        vol_label = "LOW / RETAIL ONLY"
+
     # Grading logic — STRICT ELITE RULES
     grade = 'SKIP'
     is_entry = False
@@ -538,6 +549,11 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
         grade = "SKIP (Low Profit vs Fees)"
 
+    # Gate 4: Institutional Volume Shocker (RVOL >= 1.8x average volume)
+    if is_entry and rvol < 1.8:
+        is_entry = False
+        grade = f"WATCH (Low Vol {rvol:.1f}x)"
+
     return {
         'symbol': symbol,
         'score': float(total_score),
@@ -550,6 +566,10 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         'vwap': float(c_vwap),
         'rsi': float(c_rsi),
         'adx': float(c_adx),
+        'rvol': float(rvol),
+        'vol_label': str(vol_label),
+        'c_vol': int(c_vol),
+        'avg_vol': int(c_avg_vol),
         'sl': round(float(sl), 2),
         'sl_risk': round(float(sl_risk), 2),
         't1': round(float(t1), 2),
@@ -577,7 +597,13 @@ def scan_watchlist(symbols: list, capital: float = 5000) -> dict:
     with ThreadPoolExecutor(max_workers=10) as ex:
         results = list(ex.map(lambda s: scan_stock(s, capital, nifty_regime=nifty_info), symbols))
     stocks_res = [r for r in results if r is not None]
-    stocks_res.sort(key=lambda x: (x.get('is_entry', False), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
+    # Priority sorting: Actionable entries first, then highest Relative Volume (RVOL), then Score, then Profit
+    stocks_res.sort(key=lambda x: (
+        x.get('is_entry', False),
+        x.get('rvol', 0.0),
+        x.get('score', 0),
+        x.get('t2_profit', 0)
+    ), reverse=True)
 
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)

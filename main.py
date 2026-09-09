@@ -207,8 +207,8 @@ def _send_telegram_alert(entries: list):
     if not valid_candidates:
         return
         
-    # 7. MAX PROFIT OPTIMIZATION: Pick the single stock with highest score & highest projected rupee return
-    valid_candidates.sort(key=lambda x: (x.get('score', 0), x.get('t2_profit', 0), x.get('bonus_score', 0)), reverse=True)
+    # 7. INSTITUTIONAL VOLUME PRIORITIZATION: Pick the single stock with highest Relative Volume (RVOL)
+    valid_candidates.sort(key=lambda x: (x.get('rvol', 0.0), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
     best_entry = valid_candidates[0]
     
     symbol = best_entry.get('symbol', 'UNKNOWN')
@@ -219,6 +219,8 @@ def _send_telegram_alert(entries: list):
     qty = best_entry.get('qty', 0)
     grade = best_entry.get('grade', 'NONE')
     score = best_entry.get('score', 0)
+    rvol = best_entry.get('rvol', 1.0)
+    vol_label = best_entry.get('vol_label', 'High Volume')
     
     if vix_multiplier < 1.0:
         qty = max(1, int(qty * vix_multiplier))
@@ -235,8 +237,9 @@ def _send_telegram_alert(entries: list):
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
     
-    # INSTITUTIONAL 360-DEGREE FORMAT
+    # INSTITUTIONAL 360-DEGREE FORMAT WITH VOLUME SURGE
     text = f"⚡ <b>BUY {symbol}</b> (MIS Intraday)\n\n"
+    text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
     text += f"🌍 <b>Nifty 50:</b> {nifty_desc}\n"
     text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n\n"
     text += f"💰 Buy Price: <b>₹{price:.2f}</b>\n"
