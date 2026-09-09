@@ -414,7 +414,7 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
         sl = c_price - sl_risk
         
     t1 = c_price + (1.8 * sl_risk)
-    t2 = c_price + (2.8 * sl_risk)
+    t2 = c_price + (3.0 * sl_risk)
     
     # Risk protection: Max risk 3% of capital (e.g. ₹150 for ₹5k capital)
     max_risk = capital * 0.03
@@ -458,7 +458,7 @@ def scan_watchlist(symbols: list, capital: float = 100000) -> dict:
     with ThreadPoolExecutor(max_workers=10) as ex:
         results = list(ex.map(lambda s: scan_stock(s, capital), symbols))
     stocks_res = [r for r in results if r is not None]
-    stocks_res.sort(key=lambda x: x['score'], reverse=True)
+    stocks_res.sort(key=lambda x: (x.get('is_entry', False), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
     
     # Nifty proxy
     nifty = scan_stock('^NSEI', capital) if '^NSEI' in symbols else None

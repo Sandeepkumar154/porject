@@ -206,8 +206,8 @@ def _send_telegram_alert(entries: list):
     if not valid_candidates:
         return
         
-    # 7. PICK ONLY THE SINGLE BEST STOCK (TOP 1) — NEVER BATCH BLAST MULTIPLE MESSAGES
-    valid_candidates.sort(key=lambda x: (x.get('score', 0), x.get('bonus_score', 0)), reverse=True)
+    # 7. MAX PROFIT OPTIMIZATION: Pick the single stock with highest score & highest projected rupee return
+    valid_candidates.sort(key=lambda x: (x.get('score', 0), x.get('t2_profit', 0), x.get('bonus_score', 0)), reverse=True)
     best_entry = valid_candidates[0]
     
     symbol = best_entry.get('symbol', 'UNKNOWN')
@@ -222,16 +222,20 @@ def _send_telegram_alert(entries: list):
     if vix_multiplier < 1.0:
         qty = max(1, int(qty * vix_multiplier))
         
+    t1_profit = round(qty * (t1 - price), 0)
+    t2_profit = round(qty * (t2 - price), 0)
+        
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
     
-    # SHORT & CRISP format
+    # SHORT, CRISP format with Profit Target
     text = f"⚡ <b>BUY {symbol}</b> (MIS)\n\n"
     text += f"💰 Buy: <b>₹{price:.2f}</b>\n"
     text += f"🛑 SL: <b>₹{sl:.2f}</b>\n"
-    text += f"🎯 T1: <b>₹{t1:.2f}</b>\n"
-    text += f"🎯 T2: <b>₹{t2:.2f}</b>\n"
+    text += f"🎯 T1: <b>₹{t1:.2f}</b> (+₹{t1_profit:.0f})\n"
+    text += f"🎯 T2: <b>₹{t2:.2f}</b> (+₹{t2_profit:.0f})\n"
     text += f"📦 Qty: <b>{qty}</b>\n"
+    text += f"💵 <b>Target Profit: +₹{t2_profit:.0f}</b>\n"
     text += f"🛡️ {grade} ({score:.0f}/16)"
     
     _send_telegram_message(text)
