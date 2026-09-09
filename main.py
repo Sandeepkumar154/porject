@@ -785,6 +785,22 @@ async def trigger_test_telegram():
     except Exception:
         return {'success': False}
 
+@app.get('/api/test-data')
+async def test_data():
+    import traceback
+    try:
+        df = yf.download('SBIN.NS', period='5d', interval='5m')
+        return {
+            'empty': bool(df.empty),
+            'rows': len(df),
+            'columns': list(df.columns) if not df.empty else []
+        }
+    except Exception as e:
+        return {
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }
+
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):
     """Get live market sentiment analysis (News + VIX + FII/DII)."""
