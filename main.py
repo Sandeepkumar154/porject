@@ -98,6 +98,15 @@ def _save_active_positions(positions: dict):
 
 active_positions = _load_active_positions()
 
+# ============================================================
+# QUIET TRADING & CAPITAL PROTECTION LIMITS (Anti-Spam Shield)
+# User Capital: ₹5,000 | Max Risk: ₹150
+# ============================================================
+MAX_ACTIVE_POSITIONS = 1      # Only 1 trade at a time for ₹5,000 capital (no simultaneous clutter)
+MAX_DAILY_TRADES = 2          # Maximum 2 intraday calls per day total (prevents overtrading & notification fatigue)
+MIN_COOLDOWN_MINUTES = 30     # 30-minute quiet period between signals
+last_alert_time = None
+
 class BacktestRequest(BaseModel):
     symbols: Optional[List[str]] = None
     capital: Optional[float] = 100000.0
@@ -140,8 +149,40 @@ def _send_telegram_message(text: str) -> bool:
         return False
 
 def _send_telegram_alert(entries: list):
-    """Send short, crisp intraday trading signal."""
-    # Check VIX — block if extreme fear
+    """
+    Send short, crisp intraday trading signal.
+    QUIET & DISCIPLINED:
+    - Blocked during Dead Zone (12:00-14:00 IST).
+    - Blocked if user already has 1 open trade (Max 1 active trade for ₹5,000 capital).
+    - Blocked if 2 trades already alerted today (Max 2 trades/day).
+    - Minimum 30-min cooldown between alerts.
+    - Picks ONLY the single #1 best stock (never batch blast multiple stocks).
+    - Strictly score 15 or 16 only.
+    """
+    global last_alert_time
+    
+    now = datetime.now(IST)
+    today_str = now.strftime('%Y-%m-%d')
+    
+    # 1. STRICT DEAD ZONE BLOCK: Never trade between 12:00 and 14:00 IST
+    if 12 <= now.hour < 14:
+        return
+        
+    # 2. Capital Protection: If already holding an active trade, DO NOT ENTER ANOTHER!
+    if len(active_positions) >= MAX_ACTIVE_POSITIONS:
+        return
+        
+    # 3. Anti-Overtrading: Max 2 trades per day
+    if len(alerted_entries_today) >= MAX_DAILY_TRADES:
+        return
+        
+    # 4. Cooldown: Minimum 30 minutes between alerts
+    if last_alert_time is not None:
+        elapsed = (now - last_alert_time).total_seconds() / 60.0
+        if elapsed < MIN_COOLDOWN_MINUTES:
+            return
+            
+    # 5. Check VIX — block if extreme fear
     try:
         vix_data = fetch_india_vix()
         vix_can_trade = vix_data.get('can_trade', True)
@@ -151,94 +192,86 @@ def _send_telegram_alert(entries: list):
         vix_multiplier = 1.0
     
     if not vix_can_trade:
-        _send_telegram_message("🚨 <b>TRADING BLOCKED — VIX Too High</b>\n⛔ Signals paused until VIX drops below 22.")
         return
-    
+
+    # 6. Filter candidates strictly scoring 15 or 16 and not alerted today
+    valid_candidates = []
     for entry in entries:
         symbol = entry.get('symbol', 'UNKNOWN')
-        price = entry.get('price', 0)
-        sl = entry.get('sl', 0)
-        t1 = entry.get('t1', 0)
-        t2 = entry.get('t2', 0)
-        qty = entry.get('qty', 0)
-        grade = entry.get('grade', 'NONE')
         score = entry.get('score', 0)
-        
-        # User Rule: ONLY send calls if score is 15 or 16
-        if score < 15:
-            continue
+        alert_key = f"{symbol}_{today_str}"
+        if score >= 15 and alert_key not in alerted_entries_today:
+            valid_candidates.append(entry)
             
-        risk_amt = entry.get('risk_amount', 0)
-        sentiment_score = 0
-        news_label = 'N/A'
-        vix_value = 0
+    if not valid_candidates:
+        return
         
-        # Adjust qty if VIX suggests half position
-        if vix_multiplier < 1.0:
-            qty = max(1, int(qty * vix_multiplier))
+    # 7. PICK ONLY THE SINGLE BEST STOCK (TOP 1) — NEVER BATCH BLAST MULTIPLE MESSAGES
+    valid_candidates.sort(key=lambda x: (x.get('score', 0), x.get('bonus_score', 0)), reverse=True)
+    best_entry = valid_candidates[0]
+    
+    symbol = best_entry.get('symbol', 'UNKNOWN')
+    price = best_entry.get('price', 0)
+    sl = best_entry.get('sl', 0)
+    t1 = best_entry.get('t1', 0)
+    t2 = best_entry.get('t2', 0)
+    qty = best_entry.get('qty', 0)
+    grade = best_entry.get('grade', 'NONE')
+    score = best_entry.get('score', 0)
+    
+    if vix_multiplier < 1.0:
+        qty = max(1, int(qty * vix_multiplier))
         
-        # Deduplication: max 1 alert per stock per day (no spam every 5 mins)
-        day_slot = datetime.now(IST).strftime('%Y-%m-%d')
-        alert_key = f"{symbol}_{day_slot}"
-        if alert_key in alerted_entries_today:
-            continue
-        alerted_entries_today.add(alert_key)
-        
-        # Fetch sentiment quietly for logging
-        try:
-            sentiment = get_market_sentiment(symbol)
-            sentiment_score = sentiment.get('combined_score', 0)
-            news_label = sentiment.get('news', {}).get('sentiment_label', 'N/A')
-            vix_value = sentiment.get('vix', {}).get('vix_value', 0)
-        except Exception:
-            pass
-        
-        # SHORT & CRISP format
-        text = f"⚡ <b>BUY {symbol}</b> (MIS)\n\n"
-        text += f"💰 Buy: <b>₹{price:.2f}</b>\n"
-        text += f"🛑 SL: <b>₹{sl:.2f}</b>\n"
-        text += f"🎯 T1: <b>₹{t1:.2f}</b>\n"
-        text += f"🎯 T2: <b>₹{t2:.2f}</b>\n"
-        text += f"📦 Qty: <b>{qty}</b>\n"
-        text += f"🛡️ {grade} ({score:.0f}/16)"
-        
-        _send_telegram_message(text)
-        
-        # Track position in active monitoring for live target & stop-loss triggers
-        active_positions[symbol] = {
+    alert_key = f"{symbol}_{today_str}"
+    alerted_entries_today.add(alert_key)
+    
+    # SHORT & CRISP format
+    text = f"⚡ <b>BUY {symbol}</b> (MIS)\n\n"
+    text += f"💰 Buy: <b>₹{price:.2f}</b>\n"
+    text += f"🛑 SL: <b>₹{sl:.2f}</b>\n"
+    text += f"🎯 T1: <b>₹{t1:.2f}</b>\n"
+    text += f"🎯 T2: <b>₹{t2:.2f}</b>\n"
+    text += f"📦 Qty: <b>{qty}</b>\n"
+    text += f"🛡️ {grade} ({score:.0f}/16)"
+    
+    _send_telegram_message(text)
+    last_alert_time = now
+    
+    # Track position in active monitoring for live target & stop-loss triggers
+    active_positions[symbol] = {
+        'symbol': symbol,
+        'entry_price': round(float(price), 2),
+        'sl': round(float(sl), 2),
+        'initial_sl': round(float(sl), 2),
+        't1': round(float(t1), 2),
+        't2': round(float(t2), 2),
+        'qty': int(qty),
+        'remaining_qty': int(qty),
+        'booked_profit': 0.0,
+        'entry_time': now.strftime('%H:%M:%S'),
+        'entry_date': today_str,
+        't1_hit': False,
+        'grade': grade,
+        'score': float(score)
+    }
+    _save_active_positions(active_positions)
+    _save_alerted_entries(alerted_entries_today)
+    
+    # Log the trade for self-tuner (silent)
+    try:
+        log_trade({
             'symbol': symbol,
-            'entry_price': round(float(price), 2),
-            'sl': round(float(sl), 2),
-            'initial_sl': round(float(sl), 2),
-            't1': round(float(t1), 2),
-            't2': round(float(t2), 2),
-            'qty': int(qty),
-            'remaining_qty': int(qty),
-            'booked_profit': 0.0,
-            'entry_time': datetime.now(IST).strftime('%H:%M:%S'),
-            'entry_date': day_slot,
-            't1_hit': False,
-            'grade': grade,
-            'score': float(score)
-        }
-        _save_active_positions(active_positions)
-        _save_alerted_entries(alerted_entries_today)
-        
-        # Log the trade for self-tuner (silent)
-        try:
-            log_trade({
-                'symbol': symbol,
-                'entry_time': datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
-                'entry_price': float(price),
-                'sl': float(sl), 't1': float(t1), 't2': float(t2),
-                'qty': int(qty), 'score': float(score), 'grade': grade,
-                'window': get_current_window().get('name', 'UNKNOWN'),
-                'sentiment_score': sentiment_score,
-                'news_label': news_label, 'vix_value': vix_value,
-                'params_version': 1
-            })
-        except Exception:
-            pass
+            'entry_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+            'entry_price': float(price),
+            'sl': float(sl), 't1': float(t1), 't2': float(t2),
+            'qty': int(qty), 'score': float(score), 'grade': grade,
+            'window': get_current_window().get('name', 'UNKNOWN'),
+            'sentiment_score': 0,
+            'news_label': 'N/A', 'vix_value': 0,
+            'params_version': 1
+        })
+    except Exception:
+        pass
 
 def check_active_positions(price_map: dict):
     """
@@ -465,83 +498,57 @@ def check_active_positions(price_map: dict):
 sent_session_updates = set()
 
 async def background_market_scanner():
-    """Continuous automated background scanner during market hours."""
-    print("Background market scanner started...")
-    
-    # Send startup announcement
-    _send_telegram_message(
-        "🤖 <b>Groww Trading Bot Active</b>\n\n"
-        "✅ 9-Shield Scanner: <b>Online</b>\n"
-        "📈 Watchlist: 50 NSE Stocks\n"
-        "⏰ Scanning: <b>Every 60s</b>"
-    )
+    """Continuous automated background scanner during market hours (QUIET & DISCIPLINED)."""
+    print("[Scanner] Background market scanner started...")
     
     while True:
         try:
             now = datetime.now(IST)
             today_str = now.strftime('%Y-%m-%d')
-            current_time = now.time()
             
-            # Check market session milestones for Telegram status updates
-            # 1. Market Open (09:15 - 09:20)
             if is_market_open():
-                open_key = f"{today_str}_OPEN"
-                if open_key not in sent_session_updates and now.hour == 9 and now.minute >= 15:
-                    sent_session_updates.add(open_key)
-                    _send_telegram_message("🟢 <b>Market Open</b> — Bot scanning 50 stocks")
+                # 1. STRICT DEAD ZONE (12:00 - 14:00 IST): Trading strictly paused!
+                if 12 <= now.hour < 14:
+                    # In Dead Zone: ONLY check active positions for T1/T2/SL exits.
+                    # NEVER scan for or send new BUY signals!
+                    if active_positions:
+                        check_active_positions({})
+                    await asyncio.sleep(60)
+                    continue
 
-                # 2. Midday Dead Zone (12:00)
-                dead_key = f"{today_str}_DEADZONE"
-                if dead_key not in sent_session_updates and now.hour == 12:
-                    sent_session_updates.add(dead_key)
-                    _send_telegram_message("⏸️ <b>Dead Zone (12-2 PM)</b> — Trading paused")
-
-                # 3. Continuation Session (14:00)
-                cont_key = f"{today_str}_CONTINUATION"
-                if cont_key not in sent_session_updates and now.hour == 14:
-                    sent_session_updates.add(cont_key)
-                    _send_telegram_message("⚡ <b>Afternoon Session Active</b> (14:00-15:00)")
-
-                # 4. Daily Swing Trading Scan (15:15 IST)
+                # 2. Daily Swing Trading Scan (15:15 IST) — 1 single summary message
                 swing_key = f"{today_str}_SWING"
                 if swing_key not in sent_session_updates and now.hour == 15 and now.minute >= 15:
                     sent_session_updates.add(swing_key)
                     swing_candidates = scan_swing_candidates(TOTAL_CAPITAL)
                     if swing_candidates:
                         msg = "📊 <b>SWING PICKS (3:15 PM)</b>\n\n"
-                        for c in swing_candidates[:4]:
+                        for c in swing_candidates[:3]:
                             msg += f"🔥 <b>{c['symbol']}</b> ({c['type']})\n"
                             msg += f"   Buy: ₹{c['price']:.2f} | SL: ₹{c['sl']:.2f}\n"
                             msg += f"   T1: ₹{c['t1']:.2f} | T2: ₹{c['t2']:.2f}\n"
                             msg += f"   Qty: <b>{c['qty']}</b>\n\n"
                         _send_telegram_message(msg)
 
-                # Run live scan across watchlist
+                # 3. Live scan across watchlist
                 result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
                 stocks = result.get('stocks', [])
                 price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
                 
-                # 1. First check existing active positions for T1, T2, SL, or 3:20 PM close
+                # Check active positions for T1, T2, SL, or 3:20 PM close
                 check_active_positions(price_map)
                 
-                # 2. Then alert any new qualifying setups
-                entries = [s for s in stocks if s.get('is_entry')]
-                if entries:
-                    _send_telegram_alert(entries)
+                # 4. Only alert new entry if user has NO active trade and max daily trades not reached
+                if len(active_positions) < MAX_ACTIVE_POSITIONS and len(alerted_entries_today) < MAX_DAILY_TRADES:
+                    entries = [s for s in stocks if s.get('is_entry')]
+                    if entries:
+                        _send_telegram_alert(entries)
                     
                 await asyncio.sleep(60) # Scan every 1 minute during market hours
             else:
-                # Market Close (15:30)
+                # Outside market hours: close any lingering positions cleanly
                 if active_positions:
                     check_active_positions({})
-                    
-                close_key = f"{today_str}_CLOSE"
-                if close_key not in sent_session_updates and (now.hour == 15 and now.minute >= 30 or now.hour > 15) and now.weekday() < 5:
-                    sent_session_updates.add(close_key)
-                    next_day = "Monday" if now.weekday() >= 4 else "tomorrow"
-                    _send_telegram_message(f"🏁 <b>Market Closed</b> — Bot resumes {next_day} 09:15 AM")
-                    
-                # Outside market hours, sleep 5 minutes
                 await asyncio.sleep(300)
         except Exception as e:
             print(f"Background scanner error: {e}")
