@@ -43,8 +43,60 @@ else:
 
 TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL') or '5000')
 
-# In-memory tracking of alerted signals to prevent duplicate spam
-alerted_entries_today = set()
+POSITIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'active_positions.json')
+ALERTED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alerted_today.json')
+
+def _load_alerted_entries() -> set:
+    """Load alerted entries for today to prevent duplicates across restarts."""
+    if not os.path.exists(ALERTED_FILE):
+        return set()
+    try:
+        with open(ALERTED_FILE, 'r') as f:
+            data = json.load(f)
+        today_str = datetime.now(IST).strftime('%Y-%m-%d')
+        if data.get('date') == today_str:
+            return set(data.get('alerts', []))
+        return set()
+    except Exception:
+        return set()
+
+def _save_alerted_entries(alerted_set: set):
+    """Save alerted entries for today."""
+    try:
+        today_str = datetime.now(IST).strftime('%Y-%m-%d')
+        with open(ALERTED_FILE, 'w') as f:
+            json.dump({'date': today_str, 'alerts': list(alerted_set)}, f)
+    except Exception:
+        pass
+
+alerted_entries_today = _load_alerted_entries()
+
+def _load_active_positions() -> dict:
+    """Load active tracked intraday positions from file."""
+    if not os.path.exists(POSITIONS_FILE):
+        return {}
+    try:
+        with open(POSITIONS_FILE, 'r') as f:
+            positions = json.load(f)
+        today_str = datetime.now(IST).strftime('%Y-%m-%d')
+        valid = {}
+        for sym, pos in positions.items():
+            if pos.get('entry_date') == today_str:
+                valid[sym] = pos
+        return valid
+    except Exception as e:
+        print(f"Error loading active positions: {e}")
+        return {}
+
+def _save_active_positions(positions: dict):
+    """Save active tracked positions to file."""
+    try:
+        with open(POSITIONS_FILE, 'w') as f:
+            json.dump(positions, f, indent=2)
+    except Exception as e:
+        print(f"Error saving active positions: {e}")
+
+active_positions = _load_active_positions()
 
 class BacktestRequest(BaseModel):
     symbols: Optional[List[str]] = None
@@ -152,6 +204,26 @@ def _send_telegram_alert(entries: list):
         
         _send_telegram_message(text)
         
+        # Track position in active monitoring for live target & stop-loss triggers
+        active_positions[symbol] = {
+            'symbol': symbol,
+            'entry_price': round(float(price), 2),
+            'sl': round(float(sl), 2),
+            'initial_sl': round(float(sl), 2),
+            't1': round(float(t1), 2),
+            't2': round(float(t2), 2),
+            'qty': int(qty),
+            'remaining_qty': int(qty),
+            'booked_profit': 0.0,
+            'entry_time': datetime.now(IST).strftime('%H:%M:%S'),
+            'entry_date': day_slot,
+            't1_hit': False,
+            'grade': grade,
+            'score': float(score)
+        }
+        _save_active_positions(active_positions)
+        _save_alerted_entries(alerted_entries_today)
+        
         # Log the trade for self-tuner (silent)
         try:
             log_trade({
@@ -167,6 +239,227 @@ def _send_telegram_alert(entries: list):
             })
         except Exception:
             pass
+
+def check_active_positions(price_map: dict):
+    """
+    Real-time tracking of active intraday positions:
+    1. Target 2 Hit (Price >= T2): Book remaining profit, close position.
+    2. Target 1 Hit (Price >= T1): Book 50% profit, trail SL to entry price (Risk-Free).
+    3. Stop-Loss Hit (Price <= SL): Exit trade immediately.
+    4. 3:20 PM Square-Off: Auto close MIS trade before market closes.
+    """
+    global active_positions
+    if not active_positions:
+        return
+        
+    now = datetime.now(IST)
+    is_square_off_time = (now.hour == 15 and now.minute >= 20) or now.hour > 15
+    symbols_to_close = []
+    
+    for symbol, pos in list(active_positions.items()):
+        current_price = price_map.get(symbol)
+        
+        # If stock price not in price_map, fetch fresh quote directly
+        if not current_price or current_price <= 0:
+            try:
+                from engine import fetch_stock_data_direct
+                df = fetch_stock_data_direct(symbol, period="1d", interval="5m")
+                if df is not None and not df.empty:
+                    current_price = float(df['Close'].iloc[-1])
+            except Exception:
+                pass
+                
+        if not current_price or current_price <= 0:
+            continue
+            
+        entry_p = pos['entry_price']
+        rem_qty = pos.get('remaining_qty', pos['qty'])
+        t1_target = pos['t1']
+        t2_target = pos['t2']
+        sl_level = pos['sl']
+        t1_already_hit = pos.get('t1_hit', False)
+        
+        # 1. 3:20 PM Square-off before market close
+        if is_square_off_time:
+            exit_pnl = rem_qty * (current_price - entry_p)
+            total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            
+            msg = (
+                f"⏰ <b>3:20 PM INTRADAY CLOSE — {symbol}</b>\n\n"
+                f"💰 Exit Price: <b>₹{current_price:.2f}</b>\n"
+                f"💵 Net Trade P&L: <b>{pnl_sign}₹{total_pnl:.2f}</b>\n"
+                f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
+                f"🏁 Auto-closing MIS before market settlement."
+            )
+            _send_telegram_message(msg)
+            
+            try:
+                log_trade({
+                    'symbol': symbol,
+                    'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                    'entry_price': entry_p,
+                    'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'exit_price': current_price,
+                    'qty': pos['qty'],
+                    'exit_reason': 'INTRADAY_320_CLOSE',
+                    'net_pnl': round(total_pnl, 2),
+                    'score': pos.get('score', 0),
+                    'grade': pos.get('grade', ''),
+                    'window': 'CONTINUATION',
+                    'is_winner': total_pnl > 0,
+                    'params_version': 1
+                })
+            except Exception:
+                pass
+                
+            symbols_to_close.append(symbol)
+            continue
+            
+        # 2. Target 2 Hit (Price >= T2)
+        if current_price >= t2_target:
+            exit_pnl = rem_qty * (current_price - entry_p)
+            total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
+            
+            msg = (
+                f"🏆 <b>TARGET 2 HIT — {symbol}</b>\n\n"
+                f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Target: ₹{t2_target:.2f})\n"
+                f"💵 Total Profit: <b>+₹{total_pnl:.2f}</b>\n"
+                f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
+                f"✅ All targets reached! Trade CLOSED."
+            )
+            _send_telegram_message(msg)
+            
+            try:
+                log_trade({
+                    'symbol': symbol,
+                    'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                    'entry_price': entry_p,
+                    'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'exit_price': current_price,
+                    'qty': pos['qty'],
+                    'exit_reason': 'TARGET_2',
+                    'net_pnl': round(total_pnl, 2),
+                    'score': pos.get('score', 0),
+                    'grade': pos.get('grade', ''),
+                    'window': get_current_window().get('name', 'UNKNOWN'),
+                    'is_winner': True,
+                    'params_version': 1
+                })
+            except Exception:
+                pass
+                
+            symbols_to_close.append(symbol)
+            continue
+            
+        # 3. Target 1 Hit (Price >= T1)
+        if current_price >= t1_target and not t1_already_hit:
+            total_qty = pos['qty']
+            if total_qty <= 1:
+                # Single share trade: close at T1
+                total_pnl = 1 * (current_price - entry_p)
+                msg = (
+                    f"🎯 <b>TARGET 1 HIT — {symbol}</b>\n\n"
+                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Target: ₹{t1_target:.2f})\n"
+                    f"💵 Profit: <b>+₹{total_pnl:.2f}</b>\n"
+                    f"📦 Closed: <b>1 shs</b>\n\n"
+                    f"✅ Target reached! Single share closed."
+                )
+                _send_telegram_message(msg)
+                
+                try:
+                    log_trade({
+                        'symbol': symbol,
+                        'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                        'entry_price': entry_p,
+                        'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                        'exit_price': current_price,
+                        'qty': 1,
+                        'exit_reason': 'TARGET_1',
+                        'net_pnl': round(total_pnl, 2),
+                        'score': pos.get('score', 0),
+                        'grade': pos.get('grade', ''),
+                        'window': get_current_window().get('name', 'UNKNOWN'),
+                        'is_winner': True,
+                        'params_version': 1
+                    })
+                except Exception:
+                    pass
+                    
+                symbols_to_close.append(symbol)
+                continue
+            else:
+                # Multi-share: book 50%, trail SL to entry price
+                booked_qty = max(1, total_qty // 2)
+                remaining_qty = total_qty - booked_qty
+                booked_pnl = booked_qty * (current_price - entry_p)
+                
+                msg = (
+                    f"🎯 <b>TARGET 1 HIT — {symbol}</b>\n\n"
+                    f"💰 Current: <b>₹{current_price:.2f}</b> (Target: ₹{t1_target:.2f})\n"
+                    f"💵 Booked: <b>+₹{booked_pnl:.2f}</b> ({booked_qty} shs)\n"
+                    f"🛡️ <b>SL Moved to Cost: ₹{entry_p:.2f}</b> (Risk-Free)\n"
+                    f"🎯 Holding {remaining_qty} shs for T2: ₹{t2_target:.2f}"
+                )
+                _send_telegram_message(msg)
+                
+                pos['t1_hit'] = True
+                pos['booked_profit'] = round(booked_pnl, 2)
+                pos['remaining_qty'] = remaining_qty
+                pos['sl'] = entry_p  # Trail SL to cost / break-even
+                _save_active_positions(active_positions)
+                continue
+                
+        # 4. Stop-Loss Hit (Price <= SL)
+        if current_price <= sl_level:
+            exit_pnl = rem_qty * (current_price - entry_p)
+            total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            
+            if t1_already_hit:
+                msg = (
+                    f"🛡️ <b>TRAILED SL HIT — {symbol}</b>\n\n"
+                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Cost: ₹{sl_level:.2f})\n"
+                    f"💵 Net Trade P&L: <b>{pnl_sign}₹{total_pnl:.2f}</b>\n"
+                    f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
+                    f"✅ Remaining half closed at cost. Profit locked!"
+                )
+            else:
+                msg = (
+                    f"🛑 <b>STOP-LOSS HIT — {symbol}</b>\n\n"
+                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (SL: ₹{sl_level:.2f})\n"
+                    f"📉 Loss: <b>₹{total_pnl:.2f}</b>\n"
+                    f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
+                    f"⚠️ Strict risk cut. Discipline protects capital."
+                )
+            _send_telegram_message(msg)
+            
+            try:
+                log_trade({
+                    'symbol': symbol,
+                    'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                    'entry_price': entry_p,
+                    'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'exit_price': current_price,
+                    'qty': pos['qty'],
+                    'exit_reason': 'TRAILED_SL' if t1_already_hit else 'STOP_LOSS',
+                    'net_pnl': round(total_pnl, 2),
+                    'score': pos.get('score', 0),
+                    'grade': pos.get('grade', ''),
+                    'window': get_current_window().get('name', 'UNKNOWN'),
+                    'is_winner': total_pnl > 0,
+                    'params_version': 1
+                })
+            except Exception:
+                pass
+                
+            symbols_to_close.append(symbol)
+            continue
+            
+    if symbols_to_close:
+        for sym in symbols_to_close:
+            active_positions.pop(sym, None)
+        _save_active_positions(active_positions)
 
 # Track sent status announcements to avoid duplicate broadcasts
 sent_session_updates = set()
@@ -225,13 +518,23 @@ async def background_market_scanner():
 
                 # Run live scan across watchlist
                 result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
-                entries = [s for s in result.get('stocks', []) if s.get('is_entry')]
+                stocks = result.get('stocks', [])
+                price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
+                
+                # 1. First check existing active positions for T1, T2, SL, or 3:20 PM close
+                check_active_positions(price_map)
+                
+                # 2. Then alert any new qualifying setups
+                entries = [s for s in stocks if s.get('is_entry')]
                 if entries:
                     _send_telegram_alert(entries)
                     
                 await asyncio.sleep(60) # Scan every 1 minute during market hours
             else:
                 # Market Close (15:30)
+                if active_positions:
+                    check_active_positions({})
+                    
                 close_key = f"{today_str}_CLOSE"
                 if close_key not in sent_session_updates and (now.hour == 15 and now.minute >= 30 or now.hour > 15) and now.weekday() < 5:
                     sent_session_updates.add(close_key)
@@ -394,6 +697,35 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
           </p>
         </div>
       </template>
+      <template x-if="positions && positions.length > 0">
+        <div class="p-3.5 bg-blue-950/40 border border-blue-500/40 rounded-xl space-y-2">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center text-blue-400 font-bold text-xs">
+              <span class="text-base mr-1.5">⚡</span> ACTIVE POSITIONS (<span x-text="positions.length"></span>)
+            </div>
+            <span class="text-[10px] text-blue-300 font-mono">Live Target / SL Tracking</span>
+          </div>
+          <div class="space-y-2">
+            <template x-for="p in positions" :key="p.symbol">
+              <div class="p-2.5 bg-slate-950/80 rounded-lg border border-blue-900/40 text-xs flex items-center justify-between">
+                <div>
+                  <div class="font-bold text-slate-100 flex items-center space-x-1.5">
+                    <span x-text="p.symbol"></span>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold" :class="p.t1_hit ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-blue-500/20 text-blue-400 border border-blue-500/40'" x-text="p.t1_hit ? 'T1 BOOKED' : 'OPEN'"></span>
+                  </div>
+                  <div class="text-[10px] text-slate-400 font-mono mt-0.5">
+                    Entry: ₹<span x-text="p.entry_price"></span> | Qty: <span x-text="p.remaining_qty"></span>/<span x-text="p.qty"></span>
+                  </div>
+                </div>
+                <div class="text-right text-[11px] font-mono">
+                  <div class="text-emerald-400 font-bold">T1: ₹<span x-text="p.t1"></span> | T2: ₹<span x-text="p.t2"></span></div>
+                  <div class="text-rose-400 font-semibold">SL: ₹<span x-text="p.sl"></span></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
       <div class="space-y-3">
         <template x-for="stock in scanData.stocks || []" :key="stock.symbol">
           <div class="bg-slate-900 border rounded-xl overflow-hidden transition"
@@ -538,6 +870,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         globalData: {},
         fiiData: {},
         scanData: {},
+        positions: [],
         isScanning: false,
         isBacktesting: false,
         btSymbols: 'SBIN, RELIANCE, HCLTECH, INFY',
@@ -549,13 +882,15 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
           await this.fetchStatus();
           await this.fetchGlobal();
           await this.fetchFII();
+          await this.fetchPositions();
           await this.fetchScan();
-          setInterval(() => { if (this.activeTab === 'scanner') { this.fetchScan(true); } }, 30000);
+          setInterval(() => { if (this.activeTab === 'scanner') { this.fetchScan(true); this.fetchPositions(); } }, 30000);
         },
         async fetchStatus() { try { const r = await fetch('/api/status'); this.status = await r.json(); } catch(e) { console.error('Status fetch failed', e); } },
         async fetchGlobal() { try { const r = await fetch('/api/global'); this.globalData = await r.json(); } catch(e) { console.error('Global fetch failed', e); } },
         async fetchFII() { try { const r = await fetch('/api/fii'); this.fiiData = await r.json(); } catch(e) { console.error('FII fetch failed', e); } },
-        async fetchScan(silent=false) { if(!silent) this.isScanning=true; try { const r = await fetch('/api/scan'); this.scanData = await r.json(); } catch(e) { console.error('Scan fetch failed', e); } finally { if(!silent) this.isScanning=false; } },
+        async fetchPositions() { try { const r = await fetch('/api/positions'); const d = await r.json(); this.positions = d.positions || []; } catch(e) { console.error('Positions fetch failed', e); } },
+        async fetchScan(silent=false) { if(!silent) this.isScanning=true; try { const r = await fetch('/api/scan'); this.scanData = await r.json(); await this.fetchPositions(); } catch(e) { console.error('Scan fetch failed', e); } finally { if(!silent) this.isScanning=false; } },
         async runBacktest() { this.isBacktesting=true; this.btResults=null; try { const syms=this.btSymbols.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean); const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:syms,capital:parseFloat(this.btCapital)||100000,period:'60d'})}); this.btResults=await r.json(); } catch(e) { alert('Backtest failed: '+e); } finally { this.isBacktesting=false; } },
         async testTelegram() { this.tgMsg='Sending alert...'; try { const r=await fetch('/api/telegram/test',{method:'POST'}); const d=await r.json(); if(d.success){this.tgMsg='✓ Test alert delivered to your Telegram!';}else{this.tgMsg='⚠️ Telegram not configured yet. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env file.';} } catch(e) { this.tgMsg='Error sending test alert: '+e; } }
       }
@@ -753,8 +1088,14 @@ async def run_live_scan(symbols: Optional[str] = None):
     """Run real-time 8-shield scan on watchlist."""
     sym_list = [s.strip().upper() for s in symbols.split(',')] if symbols else DEFAULT_WATCHLIST
     result = scan_watchlist(sym_list, TOTAL_CAPITAL)
+    stocks = result.get('stocks', [])
+    price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
     
-    entries = [s for s in result.get('stocks', []) if s.get('is_entry')]
+    # 1. Evaluate open active positions for T1, T2, SL, or square-off
+    check_active_positions(price_map)
+    
+    # 2. Alert new entries
+    entries = [s for s in stocks if s.get('is_entry')]
     if entries and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         _send_telegram_alert(entries)
         
@@ -892,3 +1233,41 @@ async def manual_tune_trigger():
         return {'success': True, 'report_sent': bool(report)}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+@app.get('/api/positions')
+async def get_active_positions():
+    """Get currently active tracked intraday positions."""
+    return {
+        'count': len(active_positions),
+        'positions': list(active_positions.values())
+    }
+
+@app.post('/api/positions/clear')
+async def clear_active_positions():
+    """Clear all active tracked positions."""
+    global active_positions
+    active_positions.clear()
+    _save_active_positions(active_positions)
+    return {'success': True, 'count': 0}
+
+@app.post('/api/positions/test')
+async def test_position_trigger(symbol: str = 'SBIN', entry: float = 800.0, t1: float = 810.0, t2: float = 820.0, sl: float = 790.0, qty: int = 2):
+    """Create a mock test position to test target/SL triggers."""
+    active_positions[symbol] = {
+        'symbol': symbol,
+        'entry_price': entry,
+        'sl': sl,
+        'initial_sl': sl,
+        't1': t1,
+        't2': t2,
+        'qty': qty,
+        'remaining_qty': qty,
+        'booked_profit': 0.0,
+        'entry_time': datetime.now(IST).strftime('%H:%M:%S'),
+        'entry_date': datetime.now(IST).strftime('%Y-%m-%d'),
+        't1_hit': False,
+        'grade': 'ELITE',
+        'score': 16.0
+    }
+    _save_active_positions(active_positions)
+    return {'success': True, 'position': active_positions[symbol]}
