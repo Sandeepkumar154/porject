@@ -788,18 +788,30 @@ async def trigger_test_telegram():
 @app.get('/api/test-data')
 async def test_data():
     import traceback
+    from engine import fetch_stock_data_direct, scan_stock
+    
+    direct_err = None
+    direct_df = None
     try:
-        df = yf.download('SBIN.NS', period='5d', interval='5m')
-        return {
-            'empty': bool(df.empty),
-            'rows': len(df),
-            'columns': list(df.columns) if not df.empty else []
-        }
+        direct_df = fetch_stock_data_direct('SBIN')
     except Exception as e:
-        return {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }
+        direct_err = str(e)
+        
+    scan_res = None
+    scan_err = None
+    try:
+        scan_res = scan_stock('SBIN', 5000)
+    except Exception as e:
+        scan_err = str(e)
+        
+    return {
+        'direct_df_none': direct_df is None,
+        'direct_df_rows': len(direct_df) if direct_df is not None else 0,
+        'direct_err': direct_err,
+        'scan_res_none': scan_res is None,
+        'scan_res': scan_res,
+        'scan_err': scan_err
+    }
 
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):
