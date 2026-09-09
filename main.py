@@ -111,6 +111,11 @@ def _send_telegram_alert(entries: list):
         qty = entry.get('qty', 0)
         grade = entry.get('grade', 'NONE')
         score = entry.get('score', 0)
+        
+        # User Rule: ONLY send calls if score is 15 or 16
+        if score < 15:
+            continue
+            
         risk_amt = entry.get('risk_amount', 0)
         sentiment_score = 0
         news_label = 'N/A'
@@ -120,9 +125,9 @@ def _send_telegram_alert(entries: list):
         if vix_multiplier < 1.0:
             qty = max(1, int(qty * vix_multiplier))
         
-        # Deduplication: max 1 alert per stock per hour
-        hour_slot = datetime.now(IST).strftime('%Y-%m-%d %H')
-        alert_key = f"{symbol}_{hour_slot}"
+        # Deduplication: max 1 alert per stock per day (no spam every 5 mins)
+        day_slot = datetime.now(IST).strftime('%Y-%m-%d')
+        alert_key = f"{symbol}_{day_slot}"
         if alert_key in alerted_entries_today:
             continue
         alerted_entries_today.add(alert_key)

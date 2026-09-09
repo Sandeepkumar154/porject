@@ -393,18 +393,19 @@ def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False,
     
     passed_shields_count = sum(1 for s in shield_res['shields'].values() if s['passed'])
 
-    # Grading logic
+    # Grading logic — STRICT: Only allow entries with score 15 or 16
     grade = 'SKIP'
     is_entry = False
     
-    if base_score >= GRADE_ELITE_MIN and shield_res['all_passed']:
+    if base_score >= 16 and shield_res['all_passed']:
         grade = 'ELITE'
         is_entry = True
-    elif base_score >= GRADE_STRONG_MIN and passed_shields_count >= 6 and shield_res['mandatory_passed']:
+    elif (base_score >= 15 or (total_score >= 15 and passed_shields_count >= 7)) and shield_res['mandatory_passed']:
         grade = 'STRONG'
         is_entry = True
     elif total_score >= GRADE_AVERAGE_MIN:
         grade = 'AVERAGE'
+        is_entry = False
     
     sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
     sl_risk = c_price - sl
