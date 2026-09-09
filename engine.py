@@ -304,7 +304,18 @@ def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "5m
 # 4. Stock Scanner
 def scan_stock(symbol: str, capital: float = 100000, for_backtest: bool = False, df: pd.DataFrame = None) -> dict:
     if df is None:
-        df = fetch_stock_data_direct(symbol, period="5d", interval="5m")
+        # Tier 1: Try Groww API first if token is active
+        try:
+            from groww_manager import fetch_groww_candles
+            df = fetch_groww_candles(symbol, interval="5m")
+        except Exception:
+            df = None
+            
+        # Tier 2: Seamless fallback to direct NSE institutional feed
+        if df is None or df.empty:
+            df = fetch_stock_data_direct(symbol, period="5d", interval="5m")
+            
+        # Tier 3: Emergency fallback
         if df is None or df.empty:
             try:
                 df = yf.download(f"{symbol}.NS", period="5d", interval="5m", progress=False)

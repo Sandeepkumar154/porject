@@ -813,6 +813,23 @@ async def test_data():
         'scan_err': scan_err
     }
 
+@app.get('/api/groww/token')
+@app.post('/api/groww/token')
+async def update_groww_token(token: Optional[str] = None):
+    """Update or check daily Groww access token."""
+    from groww_manager import save_groww_token, get_groww_token
+    if token and len(token.strip()) > 5:
+        success = save_groww_token(token.strip())
+        if success:
+            _send_telegram_message("✅ <b>Groww API Token Activated!</b>\nBot is now streaming directly from Groww servers.")
+        return {'success': success, 'message': 'Token updated successfully' if success else 'Failed to save token'}
+    
+    current_token = get_groww_token()
+    return {
+        'has_token': bool(current_token),
+        'token_preview': (current_token[:6] + '...' + current_token[-4:]) if current_token else None
+    }
+
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):
     """Get live market sentiment analysis (News + VIX + FII/DII)."""
