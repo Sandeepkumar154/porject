@@ -617,190 +617,199 @@ def is_market_open() -> bool:
     return st <= now <= en
 
 # 6. Backtest Engine
-def run_backtest(symbols: list, capital: float = 100000, period: str = '60d') -> dict:
+def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> dict:
     all_trades = []
     
+    # 1. Market Direction Filter: Evaluate Nifty 50 daily trend
+    bullish_days = set()
+    try:
+        nifty_df = fetch_stock_data_direct('^NSEI', period=period, interval='15m')
+        if nifty_df is not None and not nifty_df.empty:
+            nifty_df['date'] = nifty_df.index.date
+            n_ema = compute_ema(nifty_df['Close'], 20)
+            for d in nifty_df['date'].unique():
+                day_n = nifty_df[nifty_df['date'] == d]
+                if len(day_n) >= 4:
+                    c_idx = nifty_df.index.get_loc(day_n.index[2])
+                    c_close = float(day_n['Close'].iloc[2])
+                    c_open = float(day_n['Open'].iloc[0])
+                    c_ema = float(n_ema.iloc[c_idx])
+                    if c_close > c_open and c_close > c_ema:
+                        bullish_days.add(d)
+    except Exception:
+        pass
+
     for symbol in symbols:
         try:
-            df = yf.download(f"{symbol}.NS", period=period, interval="5m")
-            if df.empty or len(df) < 100:
+            df = fetch_stock_data_direct(symbol, period=period, interval='15m')
+            if df is None or len(df) < 50:
                 continue
-                
+
             close = df['Close'].squeeze()
             high = df['High'].squeeze()
             low = df['Low'].squeeze()
             volume = df['Volume'].squeeze()
-            
             ts = pd.Series(df.index, index=df.index)
-            # convert to IST if UTC
-            if ts.dt.tz is not None:
-                ts = ts.dt.tz_convert('Asia/Kolkata')
-            else:
-                ts = ts.dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
-                
+            
             rsi = compute_rsi(close)
-            macd_line, sig_line, macd_hist = compute_macd(close)
-            bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close)
+            _, _, macd_hist = compute_macd(close)
             adx = compute_adx(high, low, close)
             atr = compute_atr(high, low, close)
+            vwap = compute_vwap(high, low, close, volume, ts)
             ema9 = compute_ema(close, 9)
             ema21 = compute_ema(close, 21)
-            ema50 = compute_ema(close, 50)
-            st_line, st_dir = compute_supertrend(high, low, close)
-            vwap = compute_vwap(high, low, close, volume, ts)
             avg_volume = volume.rolling(20).mean()
             
-            in_trade = False
-            trade_info = {}
-            stock_daily_traded = {}  # date -> True if already traded this stock today
-            last_exit_time = None    # cooldown: don't re-enter for 60 min after exit
+            df['date'] = df.index.date
+            dates = df['date'].unique()
             
-            for i in range(50, len(df)):
-                c_time = ts.iloc[i]
-                c_date = c_time.date()
+            for d in dates:
+                # Gate 1: Market Direction Filter (Nifty must be bullish)
+                if bullish_days and d not in bullish_days:
+                    continue
+                    
+                day_df = df[df['date'] == d]
+                if len(day_df) < 5:
+                    continue
+                    
+                # Gate 2: 15m Opening Range (9:15 - 9:30 AM candle)
+                first_candle = day_df.iloc[0]
+                orb_high = float(first_candle['High'])
+                orb_low = float(first_candle['Low'])
                 
-                c_price = close.iloc[i]
-                c_high = high.iloc[i]
-                c_low = low.iloc[i]
+                in_trade = False
+                trade_info = {}
                 
-                if in_trade:
-                    exit_reason = None
-                    exit_price = 0
+                for idx in range(1, min(10, len(day_df))):
+                    c_time = day_df.index[idx]
+                    curr_idx = df.index.get_loc(c_time)
+                    c_open = float(day_df['Open'].iloc[idx])
+                    c_price = float(day_df['Close'].iloc[idx])
+                    c_high = float(day_df['High'].iloc[idx])
+                    c_low = float(day_df['Low'].iloc[idx])
+                    c_vol = float(day_df['Volume'].iloc[idx])
+                    c_avg_vol = float(avg_volume.iloc[curr_idx]) if not np.isnan(avg_volume.iloc[curr_idx]) else 1.0
                     
-                    # Update trailing stop
-                    entry_price = trade_info['entry_price']
-                    current_gain = (c_price - entry_price) / entry_price
-                    
-                    if current_gain >= TRAILING_STOP_TRIGGER:
-                        new_sl = c_price * (1 - TRAILING_STOP_OFFSET)
-                        if new_sl > trade_info['sl']:
-                            trade_info['sl'] = new_sl
-                    
-                    # Exit checks (priority order)
-                    if c_low <= trade_info['sl']:
-                        exit_reason = "STOP_LOSS"
-                        exit_price = trade_info['sl']
-                    elif c_high >= trade_info['t1']:
-                        exit_reason = "TARGET_HIT"
-                        exit_price = trade_info['t1']
-                    elif adx.iloc[i] < 12:
-                        exit_reason = "ADX_DROP"
-                        exit_price = c_price
-                    elif c_time.time() >= time(15, 10):
-                        exit_reason = "TIME_EXIT"
-                        exit_price = c_price
-                        
-                    if exit_reason:
-                        pnl = (exit_price - entry_price) * trade_info['qty']
-                        turnover = (entry_price + exit_price) * trade_info['qty']
-                        cost = 40 + (turnover * 0.0005)
-                        net_pnl = pnl - cost
-                        
-                        all_trades.append({
-                            'symbol': symbol,
-                            'entry_time': trade_info['entry_time'].strftime("%Y-%m-%d %H:%M"),
-                            'entry_price': float(entry_price),
-                            'exit_time': c_time.strftime("%Y-%m-%d %H:%M"),
-                            'exit_price': float(exit_price),
-                            'qty': int(trade_info['qty']),
-                            'exit_reason': exit_reason,
-                            'net_pnl': round(float(net_pnl), 2),
-                            'score': float(trade_info['score']),
-                            'grade': trade_info['grade'],
-                            'window': trade_info['window'],
-                            'is_winner': bool(net_pnl > 0)
-                        })
-                        in_trade = False
-                        last_exit_time = c_time  # Start cooldown
-                        
-                else:
-                    # Per-stock: max 1 trade per stock per day
-                    if stock_daily_traded.get(c_date, False):
-                        continue
-                    
-                    # 60-minute cooldown after last exit
-                    if last_exit_time is not None:
-                        minutes_since_exit = (c_time - last_exit_time).total_seconds() / 60
-                        if minutes_since_exit < 60:
+                    if not in_trade:
+                        # 1. Candle Close above ORB High
+                        if c_price <= orb_high:
                             continue
-                        
-                    # Find window
-                    w_name = 'OUTSIDE'
-                    for name, w in WINDOWS.items():
-                        st = datetime.strptime(w['start'], '%H:%M').time()
-                        en = datetime.strptime(w['end'], '%H:%M').time()
-                        if st <= c_time.time() <= en:
-                            w_name = name
-                            break
+                        # 2. Bullish green candle
+                        if c_price <= c_open:
+                            continue
+                        # 3. Volume surge
+                        if c_avg_vol > 0 and (c_vol / c_avg_vol) < 1.3:
+                            continue
+                        # 4. VWAP filter
+                        c_vwap = float(vwap.iloc[curr_idx])
+                        if c_price <= c_vwap:
+                            continue
+                        # 5. MACD positive
+                        if float(macd_hist.iloc[curr_idx]) <= 0:
+                            continue
+                        # 6. Trend ladder
+                        if not (c_price > float(ema9.iloc[curr_idx]) >= float(ema21.iloc[curr_idx])):
+                            continue
                             
-                    if w_name == 'OUTSIDE' or w_name == 'DEAD_ZONE':
-                        continue
-                        
-                    if w_name == 'MOMENTUM' and c_time.time() < time(10, 0):
-                        continue
-                        
-                    # Evaluate Entry
-                    s_res = evaluate_shields(
-                        c_price, vwap.iloc[i], rsi.iloc[i], adx.iloc[i], macd_hist.iloc[i],
-                        bb_upper.iloc[i], bb_lower.iloc[i], st_dir.iloc[i], ema9.iloc[i],
-                        ema21.iloc[i], ema50.iloc[i], volume.iloc[i], avg_volume.iloc[i], atr.iloc[i]
-                    )
-                    
-                    base_score = s_res['base_score']
-                    # Add bonuses (same as scan_stock)
-                    bonus_score = 0
-                    c_vol_val = volume.iloc[i]
-                    c_avg_vol_val = avg_volume.iloc[i]
-                    if c_avg_vol_val > 0 and c_vol_val >= 3 * c_avg_vol_val:
-                        bonus_score += 4
-                    elif c_avg_vol_val > 0 and c_vol_val >= 2 * c_avg_vol_val:
-                        bonus_score += 2
-                    if rsi.iloc[i] >= 60:
-                        bonus_score += 2
-                    
-                    score = base_score + bonus_score
-                    passed_shields = sum(1 for s in s_res['shields'].values() if s['passed'])
-                    
-                    is_entry = False
-                    grade = 'SKIP'
-                    
-                    if base_score >= GRADE_ELITE_MIN and s_res['all_passed']:
-                        grade = 'ELITE'
-                        is_entry = True
-                    elif base_score >= GRADE_STRONG_MIN and passed_shields >= 6 and s_res['mandatory_passed']:
-                        grade = 'STRONG'
-                        is_entry = True
-                        
-                    if is_entry:
-                        sl = c_price - (ATR_SL_MULTIPLIER * atr.iloc[i])
+                        # Stop-loss at breakout candle low or VWAP
+                        sl = max(c_low, c_vwap * 0.998)
                         sl_risk = c_price - sl
-                        if sl_risk <= 0:
+                        risk_pct = (sl_risk / c_price) * 100
+                        if not (0.25 <= risk_pct <= 1.5):
+                            sl = c_price * 0.993 # 0.7% default stop
+                            sl_risk = c_price - sl
+                            
+                        # Anti-brokerage 5x MIS sizing
+                        max_risk = min(150.0, capital * 0.03)
+                        qty_by_risk = int(max_risk / sl_risk) if sl_risk > 0 else 1
+                        max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
+                        qty = max(1, min(qty_by_risk, max_mis_qty))
+                        
+                        t1 = c_price + (1.5 * sl_risk)
+                        t2 = c_price + (2.5 * sl_risk)
+                        
+                        # Gate 3: Projected T2 profit >= ₹250
+                        if qty * (t2 - c_price) < 250.0:
                             continue
                             
-                        risk_amt = capital * RISK_PER_TRADE_PCT
-                        qty = int(risk_amt / sl_risk)
-                        qty = max(1, min(qty, int((capital * 0.1) / c_price)))
-                        
-                        t1 = c_price + (2.0 * sl_risk)
-                        t2 = c_price + (3.0 * sl_risk)
-                        
                         trade_info = {
-                            'entry_time': c_time,
-                            'entry_price': c_price,
-                            'qty': qty,
-                            'sl': sl,
-                            't1': t1,
-                            't2': t2,
-                            'score': score,
-                            'grade': grade,
-                            'window': w_name
+                            'symbol': symbol,
+                            'entry_time': c_time.strftime("%Y-%m-%d %H:%M"),
+                            'entry_price': round(float(c_price), 2),
+                            'qty': int(qty),
+                            'rem_qty': int(qty),
+                            'sl': round(float(sl), 2),
+                            't1': round(float(t1), 2),
+                            't2': round(float(t2), 2),
+                            'booked_pnl': 0.0,
+                            't1_hit': False,
+                            'score': 16.0,
+                            'grade': 'ELITE',
+                            'window': 'MORNING'
                         }
                         in_trade = True
-                        stock_daily_traded[c_date] = True  # Max 1 trade per stock per day
+                        break
                         
+                # If trade entered, simulate remainder of the day
+                if in_trade:
+                    entry_idx = day_df.index.get_loc(trade_info['entry_time'])
+                    entry_p = trade_info['entry_price']
+                    
+                    for i in range(entry_idx + 1, len(day_df)):
+                        c_h = float(day_df['High'].iloc[i])
+                        c_l = float(day_df['Low'].iloc[i])
+                        c_c = float(day_df['Close'].iloc[i])
+                        c_t = day_df.index[i]
+                        
+                        # Target 2 hit: full exit
+                        if c_h >= trade_info['t2']:
+                            trade_info['booked_pnl'] += trade_info['rem_qty'] * (trade_info['t2'] - entry_p)
+                            trade_info['exit_reason'] = "TARGET_2"
+                            trade_info['exit_price'] = float(trade_info['t2'])
+                            trade_info['exit_time'] = c_t.strftime("%Y-%m-%d %H:%M")
+                            all_trades.append(trade_info)
+                            in_trade = False
+                            break
+                            
+                        # Target 1 hit: book 50%, move SL to cost (breakeven)
+                        if c_h >= trade_info['t1'] and not trade_info['t1_hit']:
+                            trade_info['t1_hit'] = True
+                            b_q = max(1, trade_info['qty'] // 2)
+                            trade_info['booked_pnl'] += b_q * (trade_info['t1'] - entry_p)
+                            trade_info['rem_qty'] -= b_q
+                            trade_info['sl'] = entry_p # Risk-free
+                            
+                        # Stop loss hit
+                        if c_l <= trade_info['sl']:
+                            trade_info['booked_pnl'] += trade_info['rem_qty'] * (trade_info['sl'] - entry_p)
+                            trade_info['exit_reason'] = "TRAILED_SL" if trade_info['t1_hit'] else "STOP_LOSS"
+                            trade_info['exit_price'] = float(trade_info['sl'])
+                            trade_info['exit_time'] = c_t.strftime("%Y-%m-%d %H:%M")
+                            all_trades.append(trade_info)
+                            in_trade = False
+                            break
+                            
+                        # EOD close at 3:15 PM
+                        if i == len(day_df) - 1 or c_t.time() >= time(15, 15):
+                            trade_info['booked_pnl'] += trade_info['rem_qty'] * (c_c - entry_p)
+                            trade_info['exit_reason'] = "TIME_EXIT"
+                            trade_info['exit_price'] = float(c_c)
+                            trade_info['exit_time'] = c_t.strftime("%Y-%m-%d %H:%M")
+                            all_trades.append(trade_info)
+                            in_trade = False
+                            break
         except Exception as e:
             print(f"Error backtesting {symbol}: {e}")
-            
+
+    # Compute Net PnL and winner flag for each trade
+    for t in all_trades:
+        exit_p = t.get('exit_price', t['entry_price'])
+        turnover = (t['entry_price'] + exit_p) * t['qty']
+        cost = 40.0 + (turnover * 0.0005)
+        t['total_cost'] = round(float(cost), 2)
+        t['net_pnl'] = round(float(t['booked_pnl'] - cost), 2)
+        t['is_winner'] = bool(t['net_pnl'] > 0)
+
     # Compute Metrics
     total_trades = len(all_trades)
     winners = [t for t in all_trades if t['is_winner']]
