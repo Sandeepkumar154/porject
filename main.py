@@ -511,6 +511,24 @@ def check_active_positions(price_map: dict):
         _save_active_positions(active_positions)
 
 # Track sent status announcements to avoid duplicate broadcasts
+MORNING_GREETED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'morning_greeted.json')
+
+def _load_morning_greeted() -> str:
+    if not os.path.exists(MORNING_GREETED_FILE):
+        return ""
+    try:
+        with open(MORNING_GREETED_FILE, 'r') as f:
+            return json.load(f).get('date', '')
+    except Exception:
+        return ""
+
+def _save_morning_greeted(date_str: str):
+    try:
+        with open(MORNING_GREETED_FILE, 'w') as f:
+            json.dump({'date': date_str}, f)
+    except Exception:
+        pass
+
 sent_session_updates = set()
 
 async def background_market_scanner():
@@ -523,6 +541,19 @@ async def background_market_scanner():
             today_str = now.strftime('%Y-%m-%d')
             
             if is_market_open():
+                # 0. Daily Morning Heartbeat Message (Sends once every morning when market opens)
+                if _load_morning_greeted() != today_str:
+                    _save_morning_greeted(today_str)
+                    sent_session_updates.add(f"{today_str}_MORNING")
+                    greeting_msg = (
+                        "🌅 <b>Good Morning Sandeep!</b>\n\n"
+                        "🤖 <b>I am LIVE & monitoring the market.</b>\n"
+                        "📈 Strategy: 15m ORB + Volume Shocker\n"
+                        "🛡️ Capital: ₹5,000 | 1 Trade Max (Strict Discipline)\n\n"
+                        "✨ <i>Hoping for a great and profitable trade today! Have a wonderful day.</i>"
+                    )
+                    _send_telegram_message(greeting_msg)
+
                 # 1. STRICT DEAD ZONE (12:00 - 14:00 IST): Trading strictly paused!
                 if 12 <= now.hour < 14:
                     # In Dead Zone: ONLY check active positions for T1/T2/SL exits.
