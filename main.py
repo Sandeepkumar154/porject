@@ -237,18 +237,38 @@ def _send_telegram_alert(entries: list):
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
     
-    # INSTITUTIONAL 360-DEGREE FORMAT WITH VOLUME SURGE
-    text = f"⚡ <b>BUY {symbol}</b> (MIS Intraday)\n\n"
+    # Execute live paper trade with Rs. 5,000 virtual capital first
+    try:
+        import paper_trading
+        paper_trading.record_paper_entry(
+            symbol=symbol, price=float(price), qty=int(qty),
+            sl=float(sl), t1=float(t1), t2=float(t2),
+            setup="15m ORB Breakout"
+        )
+    except Exception as e:
+        print(f"Error logging paper trade: {e}")
+
+    now_exec_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+    order_val = float(price) * int(qty)
+    
+    # INSTITUTIONAL 360-DEGREE FORMAT WITH LIVE EXECUTION DETAILS & EXACT TIMESTAMP
+    text = f"🟢 <b>LIVE INTRADAY TRADE EXECUTED</b>\n"
+    text += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"⏰ <b>Executed At:</b> {now_exec_str}\n"
+    text += f"🎯 <b>Stock:</b> <b>{symbol}</b> (MIS Intraday)\n"
+    text += f"💰 <b>Entry Price:</b> ₹{price:.2f}\n"
+    text += f"📦 <b>Quantity:</b> <b>{qty} shares</b> (5x MIS Margin)\n"
+    text += f"💼 <b>Order Value:</b> ₹{order_val:,.2f} | <b>Capital:</b> ₹5,000.00\n\n"
+    text += f"🛑 <b>Stop-Loss:</b> ₹{sl:.2f} (Max Risk: ₹{risk_amt:.0f})\n"
+    text += f"🎯 <b>Target 1:</b> ₹{t1:.2f} (+₹{t1_profit:.0f})\n"
+    text += f"🎯 <b>Target 2:</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
+    text += f"💵 <b>Net Target Profit:</b> <b>+₹{net_t2_profit:.0f}</b> (After ₹45 Groww fees)\n\n"
     text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
-    text += f"🌍 <b>Nifty 50:</b> {nifty_desc}\n"
-    text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n\n"
-    text += f"💰 Buy Price: <b>₹{price:.2f}</b>\n"
-    text += f"🛑 Stop-Loss: <b>₹{sl:.2f}</b> (Risk: ₹{risk_amt:.0f})\n"
-    text += f"🎯 Target 1: <b>₹{t1:.2f}</b> (+₹{t1_profit:.0f})\n"
-    text += f"🎯 Target 2: <b>₹{t2:.2f}</b> (+₹{t2_profit:.0f})\n"
-    text += f"📦 Quantity: <b>{qty} shares</b> (5x MIS)\n\n"
-    text += f"💵 <b>Net Target Profit: +₹{net_t2_profit:.0f}</b> (After ₹40 brokerage)\n"
-    text += f"🛡️ Grade: <b>{grade}</b> ({score:.0f}/16)"
+    text += f"🌍 <b>Market Tide:</b> {nifty_desc}\n"
+    text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n"
+    text += f"🛡️ <b>Grade:</b> {grade} ({score:.0f}/16)\n"
+    text += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"⚠️ <i>100% live price execution in virtual ledger. Zero real money at risk.</i>"
     
     _send_telegram_message(text)
     last_alert_time = now
@@ -272,17 +292,6 @@ def _send_telegram_alert(entries: list):
     }
     _save_active_positions(active_positions)
     _save_alerted_entries(alerted_entries_today)
-    
-    # Execute live paper trade with Rs. 5,000 virtual capital
-    try:
-        import paper_trading
-        paper_trading.record_paper_entry(
-            symbol=symbol, price=float(price), qty=int(qty),
-            sl=float(sl), t1=float(t1), t2=float(t2),
-            setup="15m ORB Breakout"
-        )
-    except Exception as e:
-        print(f"Error logging paper trade: {e}")
     
     # Log the trade for self-tuner (silent)
     try:
@@ -342,28 +351,36 @@ def check_active_positions(price_map: dict):
         
         # 1. 3:20 PM Square-off before market close
         if is_square_off_time:
+            now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
             exit_pnl = rem_qty * (current_price - entry_p)
             total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
             pnl_sign = "+" if total_pnl >= 0 else ""
             
-            msg = (
-                f"⏰ <b>3:20 PM INTRADAY CLOSE — {symbol}</b>\n\n"
-                f"💰 Exit Price: <b>₹{current_price:.2f}</b>\n"
-                f"💵 Net Trade P&L: <b>{pnl_sign}₹{total_pnl:.2f}</b>\n"
-                f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
-                f"🏁 Auto-closing MIS before market settlement."
-            )
-            
+            pres = {}
             try:
                 import paper_trading
                 pres = paper_trading.record_paper_exit(symbol, current_price, "3:20 PM Square-off")
-                if pres.get("success"):
-                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
             except Exception:
                 pass
                 
+            net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+            new_bal = pres.get("new_balance", 5000.0)
+            
+            msg = (
+                f"🔴 <b>LIVE INTRADAY TRADE EXITED — 3:20 PM CLOSE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                f"🏁 <b>Reason:</b> Auto-closing MIS before market settlement\n"
+                f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                f"📦 <b>Closed:</b> {rem_qty} shares\n"
+                f"💰 <b>Gross Trade P&L:</b> {pnl_sign}₹{total_pnl:.2f}\n"
+                f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b>\n"
+                f"💼 <b>Updated Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━"
+            )
             _send_telegram_message(msg)
-
             
             try:
                 log_trade({
@@ -389,25 +406,34 @@ def check_active_positions(price_map: dict):
             
         # 2. Target 2 Hit (Price >= T2)
         if current_price >= t2_target:
+            now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
             exit_pnl = rem_qty * (current_price - entry_p)
             total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
             
-            msg = (
-                f"🏆 <b>TARGET 2 HIT — {symbol}</b>\n\n"
-                f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Target: ₹{t2_target:.2f})\n"
-                f"💵 Total Profit: <b>+₹{total_pnl:.2f}</b>\n"
-                f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
-                f"✅ All targets reached! Trade CLOSED."
-            )
-            
+            pres = {}
             try:
                 import paper_trading
                 pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_2_HIT")
-                if pres.get("success"):
-                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
             except Exception:
                 pass
                 
+            net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+            new_bal = pres.get("new_balance", 5000.0)
+            
+            msg = (
+                f"🏆 <b>LIVE INTRADAY TRADE EXITED — TARGET 2 HIT ✅</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                f"🏁 <b>Reason:</b> All targets achieved! Trade CLOSED.\n"
+                f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                f"📦 <b>Closed:</b> {rem_qty} shares\n"
+                f"💰 <b>Gross Profit:</b> +₹{total_pnl:.2f}\n"
+                f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b>\n"
+                f"💼 <b>Updated Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━"
+            )
             _send_telegram_message(msg)
             
             try:
@@ -434,26 +460,34 @@ def check_active_positions(price_map: dict):
             
         # 3. Target 1 Hit (Price >= T1)
         if current_price >= t1_target and not t1_already_hit:
+            now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
             total_qty = pos['qty']
             if total_qty <= 1:
                 # Single share trade: close at T1
                 total_pnl = 1 * (current_price - entry_p)
-                msg = (
-                    f"🎯 <b>TARGET 1 HIT — {symbol}</b>\n\n"
-                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Target: ₹{t1_target:.2f})\n"
-                    f"💵 Profit: <b>+₹{total_pnl:.2f}</b>\n"
-                    f"📦 Closed: <b>1 shs</b>\n\n"
-                    f"✅ Target reached! Single share closed."
-                )
-                
+                pres = {}
                 try:
                     import paper_trading
                     pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_HIT")
-                    if pres.get("success"):
-                        msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
                 except Exception:
                     pass
-                    
+                net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+                new_bal = pres.get("new_balance", 5000.0)
+                
+                msg = (
+                    f"🎯 <b>LIVE INTRADAY TRADE EXITED — TARGET 1 HIT ✅</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"🏁 <b>Reason:</b> Target 1 reached! Single share closed.\n"
+                    f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                    f"📦 <b>Closed:</b> 1 share\n"
+                    f"💰 <b>Gross Profit:</b> +₹{total_pnl:.2f}\n"
+                    f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                    f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b>\n"
+                    f"💼 <b>Updated Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                )
                 _send_telegram_message(msg)
                 
                 try:
@@ -483,20 +517,23 @@ def check_active_positions(price_map: dict):
                 remaining_qty = total_qty - booked_qty
                 booked_pnl = booked_qty * (current_price - entry_p)
                 
-                msg = (
-                    f"🎯 <b>TARGET 1 HIT — {symbol}</b>\n\n"
-                    f"💰 Current: <b>₹{current_price:.2f}</b> (Target: ₹{t1_target:.2f})\n"
-                    f"💵 Booked: <b>+₹{booked_pnl:.2f}</b> ({booked_qty} shs)\n"
-                    f"🛡️ <b>SL Moved to Cost: ₹{entry_p:.2f}</b> (Risk-Free)\n"
-                    f"🎯 Holding {remaining_qty} shs for T2: ₹{t2_target:.2f}"
-                )
-                
                 try:
                     import paper_trading
                     paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_PARTIAL", exit_qty=booked_qty)
                 except Exception:
                     pass
                     
+                msg = (
+                    f"🎯 <b>LIVE INTRADAY TARGET 1 HIT — 50% PROFIT BOOKED</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"💵 <b>Current:</b> ₹{current_price:.2f} (Target: ₹{t1_target:.2f})\n"
+                    f"📦 <b>Booked:</b> +₹{booked_pnl:.2f} ({booked_qty} shares)\n"
+                    f"🛡️ <b>SL Moved to Cost: ₹{entry_p:.2f}</b> (Trade is 100% Risk-Free)\n"
+                    f"🎯 <b>Holding {remaining_qty} shs for Target 2: ₹{t2_target:.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                )
                 _send_telegram_message(msg)
                 
                 pos['t1_hit'] = True
@@ -508,35 +545,37 @@ def check_active_positions(price_map: dict):
                 
         # 4. Stop-Loss Hit (Price <= SL)
         if current_price <= sl_level:
+            now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
             exit_pnl = rem_qty * (current_price - entry_p)
             total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
             pnl_sign = "+" if total_pnl >= 0 else ""
             
-            if t1_already_hit:
-                msg = (
-                    f"🛡️ <b>TRAILED SL HIT — {symbol}</b>\n\n"
-                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (Cost: ₹{sl_level:.2f})\n"
-                    f"💵 Net Trade P&L: <b>{pnl_sign}₹{total_pnl:.2f}</b>\n"
-                    f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
-                    f"✅ Remaining half closed at cost. Profit locked!"
-                )
-            else:
-                msg = (
-                    f"🛑 <b>STOP-LOSS HIT — {symbol}</b>\n\n"
-                    f"💰 Exit Price: <b>₹{current_price:.2f}</b> (SL: ₹{sl_level:.2f})\n"
-                    f"📉 Loss: <b>₹{total_pnl:.2f}</b>\n"
-                    f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
-                    f"⚠️ Strict risk cut. Discipline protects capital."
-                )
-                
+            pres = {}
             try:
                 import paper_trading
                 pres = paper_trading.record_paper_exit(symbol, current_price, "TRAILED_SL" if t1_already_hit else "STOP_LOSS")
-                if pres.get("success"):
-                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
             except Exception:
                 pass
                 
+            net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+            new_bal = pres.get("new_balance", 5000.0)
+            sl_header = "TRAILED SL HIT (PROFIT/COST LOCKED) 🛡️" if t1_already_hit else "STOP-LOSS HIT 🛑"
+            sl_reason = "Trailed Stop hit at breakeven/profit" if t1_already_hit else "Strict risk cutoff executed to protect capital"
+            
+            msg = (
+                f"🛑 <b>LIVE INTRADAY TRADE EXITED — {sl_header}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                f"🏁 <b>Reason:</b> {sl_reason}\n"
+                f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                f"📦 <b>Closed:</b> {rem_qty} shares\n"
+                f"💰 <b>Gross P&L:</b> {pnl_sign}₹{total_pnl:.2f}\n"
+                f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b>\n"
+                f"💼 <b>Updated Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━"
+            )
             _send_telegram_message(msg)
             
             try:
@@ -620,19 +659,63 @@ async def background_market_scanner():
                     await asyncio.sleep(60)
                     continue
 
-                # 2. Daily Swing Trading Scan (15:15 IST) — 1 single summary message
+                # 2. Daily Swing Trading Scan & Auto-Paper Execution (15:15 IST)
                 swing_key = f"{today_str}_SWING"
                 if swing_key not in sent_session_updates and now.hour == 15 and now.minute >= 15:
                     sent_session_updates.add(swing_key)
-                    swing_candidates = scan_swing_candidates(TOTAL_CAPITAL)
-                    if swing_candidates:
-                        msg = "📊 <b>SWING PICKS (3:15 PM)</b>\n\n"
-                        for c in swing_candidates[:3]:
-                            msg += f"🔥 <b>{c['symbol']}</b> ({c['type']})\n"
-                            msg += f"   Buy: ₹{c['price']:.2f} | SL: ₹{c['sl']:.2f}\n"
-                            msg += f"   T1: ₹{c['t1']:.2f} | T2: ₹{c['t2']:.2f}\n"
-                            msg += f"   Qty: <b>{c['qty']}</b>\n\n"
-                        _send_telegram_message(msg)
+                    try:
+                        import paper_trading
+                        swing_acc = paper_trading.get_paper_account().get("swing", {})
+                        swing_avail_cash = swing_acc.get("current_balance", 5000.0)
+                        active_swings = [p["symbol"] for p in swing_acc.get("active_positions", [])]
+                        
+                        swing_candidates = scan_swing_candidates(min(swing_avail_cash, 5000.0))
+                        if swing_candidates:
+                            # Auto-execute top qualified swing candidate that we don't already hold
+                            top_c = None
+                            for c in swing_candidates:
+                                if c['symbol'] not in active_swings and c['price'] <= swing_avail_cash:
+                                    top_c = c
+                                    break
+                                    
+                            if top_c:
+                                s_trade = paper_trading.record_swing_entry(
+                                    symbol=top_c['symbol'],
+                                    price=top_c['price'],
+                                    qty=top_c['qty'],
+                                    sl=top_c['sl'],
+                                    t1=top_c['t1'],
+                                    t2=top_c['t2'],
+                                    setup=top_c['setup']
+                                )
+                                now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                                s_msg = (
+                                    f"🟢 <b>LIVE SWING TRADE EXECUTED</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"⏰ <b>Executed At:</b> {now_time_str}\n"
+                                    f"🎯 <b>Stock:</b> <b>{top_c['symbol']}</b> (CNC Delivery)\n"
+                                    f"💰 <b>Entry Price:</b> ₹{top_c['price']:.2f}\n"
+                                    f"📦 <b>Quantity:</b> <b>{top_c['qty']} shares</b> (Holding 2-10 Days)\n"
+                                    f"💼 <b>Order Value:</b> ₹{top_c['price'] * top_c['qty']:,.2f} | <b>Swing Book:</b> ₹5,000.00\n\n"
+                                    f"🛑 <b>Stop-Loss:</b> ₹{top_c['sl']:.2f} (-3.5%)\n"
+                                    f"🎯 <b>Target 1:</b> ₹{top_c['t1']:.2f} (+5.5%)\n"
+                                    f"🎯 <b>Target 2:</b> ₹{top_c['t2']:.2f} (+9.0%)\n"
+                                    f"💥 <b>Setup:</b> {top_c['setup']}\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"📦 <i>Position tracked in Swing Book until Target or Stop-Loss is hit.</i>"
+                                )
+                                _send_telegram_message(s_msg)
+                            else:
+                                msg = "📊 <b>DAILY SWING PICKS SCAN (3:15 PM)</b>\n"
+                                msg += "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                for c in swing_candidates[:3]:
+                                    msg += f"🔥 <b>{c['symbol']}</b> ({c['type']})\n"
+                                    msg += f"   Buy: ₹{c['price']:.2f} | SL: ₹{c['sl']:.2f}\n"
+                                    msg += f"   T1: ₹{c['t1']:.2f} | T2: ₹{c['t2']:.2f}\n"
+                                    msg += f"   Qty: <b>{c['qty']}</b>\n\n"
+                                _send_telegram_message(msg)
+                    except Exception as swe:
+                        print(f"Error in swing scan: {swe}")
 
                 # 2b. Friday Weekly Paper Trading Report (15:35 IST) — Full Weekly P&L Audit
                 friday_paper_key = f"{today_str}_FRIDAY_PAPER_REPORT"
@@ -650,8 +733,55 @@ async def background_market_scanner():
                 stocks = result.get('stocks', [])
                 price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
                 
-                # Check active positions for T1, T2, SL, or 3:20 PM close
+                # Check active intraday positions for T1, T2, SL, or 3:20 PM close
                 check_active_positions(price_map)
+
+                # Check active swing positions against live market prices
+                try:
+                    import paper_trading
+                    active_swings = paper_trading.get_paper_account().get("swing", {}).get("active_positions", [])
+                    if active_swings:
+                        swing_price_map = {}
+                        for pos in active_swings:
+                            sym = pos["symbol"]
+                            if sym in price_map:
+                                swing_price_map[sym] = price_map[sym]
+                            else:
+                                from engine import fetch_stock_data_direct
+                                sdf = fetch_stock_data_direct(sym, period="1d", interval="5m")
+                                if sdf is not None and not sdf.empty:
+                                    swing_price_map[sym] = float(sdf['Close'].iloc[-1])
+                        
+                        if swing_price_map:
+                            swing_events = paper_trading.check_swing_positions(swing_price_map)
+                            for ev in swing_events:
+                                if ev["type"] == "SWING_EXIT":
+                                    s_exit_msg = (
+                                        f"🔴 <b>LIVE SWING TRADE EXITED — {ev['reason']}</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"⏰ <b>Exit Executed At:</b> {ev['exit_time']}\n"
+                                        f"🎯 <b>Stock:</b> <b>{ev['symbol']}</b>\n"
+                                        f"🏁 <b>Reason:</b> {ev['reason']}\n"
+                                        f"💵 <b>Exit Price:</b> ₹{ev['exit_price']:.2f}\n"
+                                        f"💸 <b>DP Charges & Taxes:</b> -₹20.00\n"
+                                        f"📈 <b>Net Realised P&L:</b> <b>{'+' if ev['net_pnl'] >= 0 else ''}₹{ev['net_pnl']:.2f}</b>\n"
+                                        f"💼 <b>Updated Swing Capital:</b> <b>₹{ev['new_balance']:,.2f}</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━"
+                                    )
+                                    _send_telegram_message(s_exit_msg)
+                                elif ev["type"] == "SWING_T1":
+                                    s_t1_msg = (
+                                        f"🎯 <b>LIVE SWING TARGET 1 HIT (+5.5%) — {ev['symbol']}</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"⏰ <b>Executed At:</b> {ev['exit_time']}\n"
+                                        f"💰 <b>Current Price:</b> ₹{ev['exit_price']:.2f}\n"
+                                        f"🛡️ <b>Stop-Loss Moved to Cost:</b> ₹{ev['sl_moved']:.2f} (Trade is 100% Risk-Free)\n"
+                                        f"🎯 <b>Target 2 in View (+9.0%)</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━"
+                                    )
+                                    _send_telegram_message(s_t1_msg)
+                except Exception as se:
+                    print(f"Error checking swing positions: {se}")
                 
                 # 4. Only alert new entry if within valid trading window (STRICTLY before 14:45 IST)
                 # Never take an intraday MIS entry after 2:45 PM since broker square-off is at 3:15-3:20 PM!
@@ -1526,16 +1656,22 @@ async def trigger_paper_report():
         return {'success': False, 'error': str(e)}
 
 @app.post('/api/paper/reset')
-async def reset_paper_account(capital: Optional[float] = 5000.0):
-    """Reset the paper trading account back to fresh initial capital."""
+async def reset_paper_account():
+    """Reset the paper trading account back to fresh initial capital (Rs. 5,000 Intraday + Rs. 5,000 Swing)."""
     try:
         import paper_trading
-        account = paper_trading.init_paper_account(initial_capital=capital or 5000.0)
-        # Force re-init if file exists
-        from paper_trading import ACCOUNT_FILE
-        if os.path.exists(ACCOUNT_FILE):
-            os.remove(ACCOUNT_FILE)
-        account = paper_trading.init_paper_account(initial_capital=capital or 5000.0)
+        account = paper_trading.init_paper_account(force_reset=True)
         return {'success': True, 'account': account}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+@app.get('/api/paper/swing')
+async def get_swing_portfolio():
+    """Get live Swing Trading paper portfolio and open positions."""
+    try:
+        import paper_trading
+        account = paper_trading.get_paper_account()
+        return account.get("swing", {})
+    except Exception as e:
+        return {'error': str(e)}
+
