@@ -1,0 +1,15 @@
+{
+  "account_id": "PAPER-SANDEEP-5K",
+  "initial_capital": 5000.0,
+  "current_balance": 5000.0,
+  "realised_pnl": 0.0,
+  "total_brokerage_paid": 0.0,
+  "total_trades": 0,
+  "winning_trades": 0,
+  "losing_trades": 0,
+  "win_rate": 0.0,
+  "active_trade": null,
+  "start_date": "2026-09-10",
+  "last_updated": "2026-09-10 22:02:32",
+  "trades_history": []
+}

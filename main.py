@@ -273,9 +273,21 @@ def _send_telegram_alert(entries: list):
     _save_active_positions(active_positions)
     _save_alerted_entries(alerted_entries_today)
     
+    # Execute live paper trade with Rs. 5,000 virtual capital
+    try:
+        import paper_trading
+        paper_trading.record_paper_entry(
+            symbol=symbol, price=float(price), qty=int(qty),
+            sl=float(sl), t1=float(t1), t2=float(t2),
+            setup="15m ORB Breakout"
+        )
+    except Exception as e:
+        print(f"Error logging paper trade: {e}")
+    
     # Log the trade for self-tuner (silent)
     try:
         log_trade({
+
             'symbol': symbol,
             'entry_time': now.strftime('%Y-%m-%d %H:%M:%S'),
             'entry_price': float(price),
@@ -341,7 +353,17 @@ def check_active_positions(price_map: dict):
                 f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
                 f"🏁 Auto-closing MIS before market settlement."
             )
+            
+            try:
+                import paper_trading
+                pres = paper_trading.record_paper_exit(symbol, current_price, "3:20 PM Square-off")
+                if pres.get("success"):
+                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
+            except Exception:
+                pass
+                
             _send_telegram_message(msg)
+
             
             try:
                 log_trade({
@@ -377,6 +399,15 @@ def check_active_positions(price_map: dict):
                 f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
                 f"✅ All targets reached! Trade CLOSED."
             )
+            
+            try:
+                import paper_trading
+                pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_2_HIT")
+                if pres.get("success"):
+                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
+            except Exception:
+                pass
+                
             _send_telegram_message(msg)
             
             try:
@@ -414,6 +445,15 @@ def check_active_positions(price_map: dict):
                     f"📦 Closed: <b>1 shs</b>\n\n"
                     f"✅ Target reached! Single share closed."
                 )
+                
+                try:
+                    import paper_trading
+                    pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_HIT")
+                    if pres.get("success"):
+                        msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
+                except Exception:
+                    pass
+                    
                 _send_telegram_message(msg)
                 
                 try:
@@ -450,6 +490,13 @@ def check_active_positions(price_map: dict):
                     f"🛡️ <b>SL Moved to Cost: ₹{entry_p:.2f}</b> (Risk-Free)\n"
                     f"🎯 Holding {remaining_qty} shs for T2: ₹{t2_target:.2f}"
                 )
+                
+                try:
+                    import paper_trading
+                    paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_PARTIAL", exit_qty=booked_qty)
+                except Exception:
+                    pass
+                    
                 _send_telegram_message(msg)
                 
                 pos['t1_hit'] = True
@@ -481,6 +528,15 @@ def check_active_positions(price_map: dict):
                     f"📦 Closed: <b>{rem_qty} shs</b>\n\n"
                     f"⚠️ Strict risk cut. Discipline protects capital."
                 )
+                
+            try:
+                import paper_trading
+                pres = paper_trading.record_paper_exit(symbol, current_price, "TRAILED_SL" if t1_already_hit else "STOP_LOSS")
+                if pres.get("success"):
+                    msg += f"\n💼 <b>Virtual Capital:</b> ₹{pres['new_balance']:,.2f} ({pres['net_pnl']:+0.2f} after Groww fees)"
+            except Exception:
+                pass
+                
             _send_telegram_message(msg)
             
             try:
@@ -501,6 +557,7 @@ def check_active_positions(price_map: dict):
                 })
             except Exception:
                 pass
+
                 
             symbols_to_close.append(symbol)
             continue
@@ -577,6 +634,17 @@ async def background_market_scanner():
                             msg += f"   Qty: <b>{c['qty']}</b>\n\n"
                         _send_telegram_message(msg)
 
+                # 2b. Friday Weekly Paper Trading Report (15:35 IST) — Full Weekly P&L Audit
+                friday_paper_key = f"{today_str}_FRIDAY_PAPER_REPORT"
+                if friday_paper_key not in sent_session_updates and now.weekday() == 4 and now.hour == 15 and now.minute >= 35:
+                    sent_session_updates.add(friday_paper_key)
+                    try:
+                        import paper_trading
+                        rep = paper_trading.generate_weekly_paper_report()
+                        _send_telegram_message(rep)
+                    except Exception as e:
+                        print(f"Error sending Friday paper report: {e}")
+
                 # 3. Live scan across watchlist
                 result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
                 stocks = result.get('stocks', [])
@@ -649,6 +717,14 @@ async def weekly_self_tune():
                         f"Auto-tune encountered an issue: {str(e)[:100]}\n"
                         f"Current parameters remain unchanged. Bot is safe."
                     )
+                
+                # Send weekly paper trading audit alongside self-tune
+                try:
+                    import paper_trading
+                    paper_rep = paper_trading.generate_weekly_paper_report()
+                    _send_telegram_message(paper_rep)
+                except Exception as pe:
+                    print(f"[Paper-Trading] Error generating Sunday report: {pe}")
                 
                 # Sleep 1 hour to prevent re-triggering
                 await asyncio.sleep(3600)
@@ -1428,3 +1504,38 @@ async def test_position_trigger(symbol: str = 'SBIN', entry: float = 800.0, t1: 
     }
     _save_active_positions(active_positions)
     return {'success': True, 'position': active_positions[symbol]}
+
+@app.get('/api/paper')
+async def get_paper_portfolio():
+    """Get live virtual paper trading account, balance, active trades, and PnL."""
+    try:
+        import paper_trading
+        return paper_trading.get_paper_account()
+    except Exception as e:
+        return {'error': str(e)}
+
+@app.post('/api/paper/report')
+async def trigger_paper_report():
+    """Generate and send weekly paper trading audit report to Telegram."""
+    try:
+        import paper_trading
+        report = paper_trading.generate_weekly_paper_report()
+        success = _send_telegram_message(report)
+        return {'success': success, 'report': report}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@app.post('/api/paper/reset')
+async def reset_paper_account(capital: Optional[float] = 5000.0):
+    """Reset the paper trading account back to fresh initial capital."""
+    try:
+        import paper_trading
+        account = paper_trading.init_paper_account(initial_capital=capital or 5000.0)
+        # Force re-init if file exists
+        from paper_trading import ACCOUNT_FILE
+        if os.path.exists(ACCOUNT_FILE):
+            os.remove(ACCOUNT_FILE)
+        account = paper_trading.init_paper_account(initial_capital=capital or 5000.0)
+        return {'success': True, 'account': account}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
