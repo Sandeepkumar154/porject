@@ -585,8 +585,17 @@ async def background_market_scanner():
                 # Check active positions for T1, T2, SL, or 3:20 PM close
                 check_active_positions(price_map)
                 
-                # 4. Only alert new entry if user has NO active trade and max daily trades not reached
-                if len(active_positions) < MAX_ACTIVE_POSITIONS and len(alerted_entries_today) < MAX_DAILY_TRADES:
+                # 4. Only alert new entry if within valid trading window (STRICTLY before 14:45 IST)
+                # Never take an intraday MIS entry after 2:45 PM since broker square-off is at 3:15-3:20 PM!
+                window = get_current_window()
+                can_enter = (
+                    window.get('active', False) and
+                    window.get('name') != 'DEAD_ZONE' and
+                    (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+                    len(active_positions) < MAX_ACTIVE_POSITIONS and
+                    len(alerted_entries_today) < MAX_DAILY_TRADES
+                )
+                if can_enter:
                     entries = [s for s in stocks if s.get('is_entry')]
                     if entries:
                         _send_telegram_alert(entries)
@@ -1213,10 +1222,20 @@ async def run_live_scan(symbols: Optional[str] = None):
     # 1. Evaluate open active positions for T1, T2, SL, or square-off
     check_active_positions(price_map)
     
-    # 2. Alert new entries
+    # 2. Alert new entries (only if within valid trading window before 14:45 IST)
     entries = [s for s in stocks if s.get('is_entry')]
     if entries and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        _send_telegram_alert(entries)
+        now = datetime.now(IST)
+        window = get_current_window()
+        can_enter = (
+            window.get('active', False) and
+            window.get('name') != 'DEAD_ZONE' and
+            (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+            len(active_positions) < MAX_ACTIVE_POSITIONS and
+            len(alerted_entries_today) < MAX_DAILY_TRADES
+        )
+        if can_enter:
+            _send_telegram_alert(entries)
         
     return result
 
