@@ -1,9 +1,9 @@
 {
   "account_id": "PAPER-SANDEEP-10K",
   "created_at": "2026-09-10 22:12:59",
-  "last_updated": "2026-09-10 22:12:59",
+  "last_updated": "2026-09-12 16:15:17",
   "total_initial_capital": 10000.0,
-  "total_current_balance": 10000.0,
+  "total_current_balance": 5867.0,
   "total_realised_pnl": 0.0,
   "intraday": {
     "book_name": "Intraday (15m ORB + Volume Shocker)",
@@ -21,14 +21,42 @@
   "swing": {
     "book_name": "Swing Trading (Daily Breakout / 20 EMA Dip)",
     "initial_capital": 5000.0,
-    "current_balance": 5000.0,
+    "current_balance": 867.0,
     "realised_pnl": 0.0,
     "total_brokerage_paid": 0.0,
     "total_trades": 0,
     "winning_trades": 0,
     "losing_trades": 0,
     "win_rate": 0.0,
-    "active_positions": [],
+    "active_positions": [
+      {
+        "symbol": "TVSMOTOR",
+        "book": "SWING",
+        "setup": "20 EMA Pullback Bounce (Bull Trend)",
+        "executed_time": "03:16:18 PM IST (11-Sep-2026)",
+        "entry_iso": "2026-09-11 15:16:18",
+        "entry_price": 4133.0,
+        "qty": 1,
+        "trade_value": 4133.0,
+        "sl": 3967.68,
+        "t1": 4339.65,
+        "t2": 4463.64,
+        "status": "OPEN",
+        "remaining_qty": 1,
+        "booked_gross": 0.0,
+        "t1_hit": false
+      }
+    ],
     "trades_history": []
-  }
+  },
+  "initial_capital": 5000.0,
+  "current_balance": 5000.0,
+  "realised_pnl": 0,
+  "total_brokerage_paid": 0,
+  "total_trades": 0,
+  "winning_trades": 0,
+  "losing_trades": 0,
+  "win_rate": 0.0,
+  "active_trade": null,
+  "trades_history": []
 }

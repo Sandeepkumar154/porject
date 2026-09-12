@@ -322,6 +322,10 @@ def check_active_positions(price_map: dict):
     if not active_positions:
         return
         
+    if not is_market_open():
+        # STRICT PROTECTION: Never evaluate exits or square-offs outside live market hours!
+        return
+        
     now = datetime.now(IST)
     is_square_off_time = (now.hour == 15 and now.minute >= 20) or now.hour > 15
     symbols_to_close = []
@@ -800,9 +804,7 @@ async def background_market_scanner():
                     
                 await asyncio.sleep(60) # Scan every 1 minute during market hours
             else:
-                # Outside market hours: close any lingering positions cleanly
-                if active_positions:
-                    check_active_positions({})
+                # Outside market hours: bot stands by quietly. Zero executions when market is closed.
                 await asyncio.sleep(300)
         except Exception as e:
             print(f"Background scanner error: {e}")
@@ -1425,6 +1427,12 @@ async def run_live_scan(symbols: Optional[str] = None):
     stocks = result.get('stocks', [])
     price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
     
+    # STRICT MARKET HOURS PROTECTION:
+    # If markets are closed (weekends, holidays, or after hours), return scan data for display only!
+    # NEVER trigger new entries, exits, or telegram alerts outside market hours!
+    if not is_market_open():
+        return result
+        
     # 1. Evaluate open active positions for T1, T2, SL, or square-off
     check_active_positions(price_map)
     

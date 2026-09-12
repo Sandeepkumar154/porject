@@ -620,18 +620,6 @@ def scan_watchlist(symbols: list, capital: float = 5000) -> dict:
     }
 
 
-# 5. Trading Window Logic
-def get_current_window() -> dict:
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist).time()
-    
-    for name, w in WINDOWS.items():
-        st = datetime.strptime(w['start'], '%H:%M').time()
-        en = datetime.strptime(w['end'], '%H:%M').time()
-        if st <= now <= en:
-            return {'name': name, 'active': True, 'number': list(WINDOWS.keys()).index(name) + 1, 'max_trades': w['max_trades']}
-    return {'name': 'OUTSIDE', 'active': False, 'number': 0, 'max_trades': 0}
-
 def is_market_open() -> bool:
     ist = pytz.timezone('Asia/Kolkata')
     dt = datetime.now(ist)
@@ -641,6 +629,21 @@ def is_market_open() -> bool:
     st = time(9, 15)
     en = time(15, 30)
     return st <= now <= en
+
+# 5. Trading Window Logic
+def get_current_window() -> dict:
+    ist = pytz.timezone('Asia/Kolkata')
+    dt = datetime.now(ist)
+    if dt.weekday() > 4:
+        return {'name': 'WEEKEND_CLOSED', 'active': False, 'number': 0, 'max_trades': 0}
+        
+    now = dt.time()
+    for name, w in WINDOWS.items():
+        st = datetime.strptime(w['start'], '%H:%M').time()
+        en = datetime.strptime(w['end'], '%H:%M').time()
+        if st <= now <= en:
+            return {'name': name, 'active': True, 'number': list(WINDOWS.keys()).index(name) + 1, 'max_trades': w['max_trades']}
+    return {'name': 'OUTSIDE', 'active': False, 'number': 0, 'max_trades': 0}
 
 # 6. Backtest Engine
 def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> dict:
