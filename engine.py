@@ -70,6 +70,26 @@ WINDOWS = {
     'CONTINUATION': {'start': '14:00', 'end': '15:00', 'max_trades': 2},
 }
 
+NSE_HOLIDAYS_2026 = {
+    datetime(2026, 1, 26).date(),   # Republic Day
+    datetime(2026, 2, 17).date(),   # Mahashivratri
+    datetime(2026, 3, 10).date(),   # Holi
+    datetime(2026, 3, 31).date(),   # Id-Ul-Fitr
+    datetime(2026, 4, 2).date(),    # Ram Navami
+    datetime(2026, 4, 3).date(),    # Good Friday
+    datetime(2026, 4, 6).date(),    # Mahavir Jayanti
+    datetime(2026, 5, 1).date(),    # Maharashtra Day
+    datetime(2026, 6, 7).date(),    # Bakri Id
+    datetime(2026, 7, 7).date(),    # Muharram
+    datetime(2026, 8, 15).date(),   # Independence Day
+    datetime(2026, 10, 2).date(),   # Gandhi Jayanti
+    datetime(2026, 10, 20).date(),  # Dussehra
+    datetime(2026, 11, 9).date(),   # Diwali Laxmi Pujan
+    datetime(2026, 11, 10).date(),  # Diwali Balipratipada
+    datetime(2026, 11, 30).date(),  # Guru Nanak Jayanti
+    datetime(2026, 12, 25).date(),  # Christmas
+}
+
 # 50 High-Liquid NSE Stocks for Intraday Scanning
 DEFAULT_WATCHLIST = [
     # Banking & Finance (12)
@@ -148,7 +168,9 @@ def compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int =
     plus_di = 100 * (plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
     minus_di = 100 * (minus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
     
-    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).abs() * 100
+    di_sum = (plus_di + minus_di).abs()
+    di_sum = di_sum.replace(0, np.nan)
+    dx = (plus_di - minus_di).abs() / di_sum * 100
     adx = dx.ewm(alpha=1/period, adjust=False).mean()
     return adx
 
@@ -343,17 +365,17 @@ def check_nifty_regime() -> dict:
         today_open = float(first_open.item() if hasattr(first_open, 'item') else first_open)
         today_gain = ((current_p - today_open) / today_open) * 100.0 if today_open > 0 else 0.0
         
-        # Strict Bullish: Above VWAP and gain >= +0.05%
-        if current_p >= current_vwap and today_gain >= 0.05:
+        # Strict Bullish/Bearish based on today_gain
+        if today_gain >= 0.15:
             regime = 'BULLISH'
             can_long = True
             can_short = False
-            desc = f"Nifty Bullish (+{today_gain:.2f}%) Above VWAP"
-        elif current_p < current_vwap and today_gain <= -0.05:
+            desc = f"Nifty Bullish (+{today_gain:.2f}%)"
+        elif today_gain <= -0.15:
             regime = 'BEARISH'
             can_long = False
             can_short = True
-            desc = f"Nifty Bearish ({today_gain:.2f}%) Below VWAP"
+            desc = f"Nifty Bearish ({today_gain:.2f}%)"
         else:
             regime = 'CHOPPY'
             can_long = False
@@ -381,7 +403,7 @@ def check_nifty_regime() -> dict:
         }
 
 # 4. Stock Scanner
-def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, df: pd.DataFrame = None, nifty_regime: dict = None) -> dict:
+def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, df: pd.DataFrame = None, nifty_regime: dict = None, trades_today: int = 0) -> dict:
     if df is None:
         # Tier 1: Direct NSE institutional feed (15m candles)
         df = fetch_stock_data_direct(symbol, period="5d", interval="15m")
@@ -489,6 +511,9 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
 
     # Stop-loss and Target calculation
     sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
+    if sl <= 0:
+        sl = c_price * 0.95
+        sl_risk = c_price - sl
     sl_risk = c_price - sl
     if sl_risk <= 0:
         sl_risk = c_price * 0.008
@@ -540,7 +565,7 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         grade = f"WAIT ({nifty_regime.get('regime', 'CHOPPY')} Mkt)"
         
     # Gate 2: 15-Minute ORB Breakout Confirmation
-    if is_entry and not orb_breakout:
+    if is_entry and not orb_breakout and len(today_candles) >= 2:
         is_entry = False
         grade = "WATCH (<15m High)"
         
@@ -553,6 +578,11 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     if is_entry and rvol < 1.8:
         is_entry = False
         grade = f"WATCH (Low Vol {rvol:.1f}x)"
+
+    # Gate 5: Max trades per day
+    if is_entry and trades_today >= MAX_TRADES_PER_DAY:
+        is_entry = False
+        grade = f"SKIP (Max {MAX_TRADES_PER_DAY} trades/day)"
 
     return {
         'symbol': symbol,
@@ -625,6 +655,8 @@ def is_market_open() -> bool:
     dt = datetime.now(ist)
     if dt.weekday() > 4:
         return False
+    if dt.date() in NSE_HOLIDAYS_2026:
+        return False
     now = dt.time()
     st = time(9, 15)
     en = time(15, 30)
@@ -634,14 +666,14 @@ def is_market_open() -> bool:
 def get_current_window() -> dict:
     ist = pytz.timezone('Asia/Kolkata')
     dt = datetime.now(ist)
-    if dt.weekday() > 4:
+    if dt.weekday() > 4 or dt.date() in NSE_HOLIDAYS_2026:
         return {'name': 'WEEKEND_CLOSED', 'active': False, 'number': 0, 'max_trades': 0}
         
     now = dt.time()
     for name, w in WINDOWS.items():
         st = datetime.strptime(w['start'], '%H:%M').time()
         en = datetime.strptime(w['end'], '%H:%M').time()
-        if st <= now <= en:
+        if st <= now < en:
             return {'name': name, 'active': True, 'number': list(WINDOWS.keys()).index(name) + 1, 'max_trades': w['max_trades']}
     return {'name': 'OUTSIDE', 'active': False, 'number': 0, 'max_trades': 0}
 
@@ -659,7 +691,7 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
             for d in nifty_df['date'].unique():
                 day_n = nifty_df[nifty_df['date'] == d]
                 if len(day_n) >= 4:
-                    c_idx = nifty_df.index.get_loc(day_n.index[2])
+                    c_idx = nifty_df.index.searchsorted(day_n.index[2])
                     c_close = float(day_n['Close'].iloc[2])
                     c_open = float(day_n['Open'].iloc[0])
                     c_ema = float(n_ema.iloc[c_idx])
@@ -711,7 +743,7 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                 
                 for idx in range(1, min(10, len(day_df))):
                     c_time = day_df.index[idx]
-                    curr_idx = df.index.get_loc(c_time)
+                    curr_idx = df.index.searchsorted(c_time)
                     c_open = float(day_df['Open'].iloc[idx])
                     c_price = float(day_df['Close'].iloc[idx])
                     c_high = float(day_df['High'].iloc[idx])
@@ -734,18 +766,18 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                         if c_price <= c_vwap:
                             continue
                         # 5. MACD positive
-                        if float(macd_hist.iloc[curr_idx]) <= 0:
+                        if pd.isna(macd_hist.iloc[curr_idx]) or float(macd_hist.iloc[curr_idx]) <= 0:
                             continue
                         # 6. Trend ladder
                         if not (c_price > float(ema9.iloc[curr_idx]) >= float(ema21.iloc[curr_idx])):
                             continue
                             
-                        # Stop-loss at breakout candle low or VWAP
-                        sl = max(c_low, c_vwap * 0.998)
+                        # Live/backtest target match
+                        c_atr = float(atr.iloc[curr_idx])
+                        sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
                         sl_risk = c_price - sl
-                        risk_pct = (sl_risk / c_price) * 100
-                        if not (0.25 <= risk_pct <= 1.5):
-                            sl = c_price * 0.993 # 0.7% default stop
+                        if sl_risk <= 0:
+                            sl = c_price * 0.95
                             sl_risk = c_price - sl
                             
                         # Anti-brokerage 5x MIS sizing
@@ -754,8 +786,8 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                         max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
                         qty = max(1, min(qty_by_risk, max_mis_qty))
                         
-                        t1 = c_price + (1.5 * sl_risk)
-                        t2 = c_price + (2.5 * sl_risk)
+                        t1 = c_price + (1.8 * sl_risk)
+                        t2 = c_price + (3.0 * sl_risk)
                         
                         # Gate 3: Projected T2 profit >= ₹250
                         if qty * (t2 - c_price) < 250.0:
@@ -781,7 +813,9 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                         
                 # If trade entered, simulate remainder of the day
                 if in_trade:
-                    entry_idx = day_df.index.get_loc(trade_info['entry_time'])
+                    entry_idx = day_df.index.searchsorted(pd.Timestamp(trade_info['entry_time']))
+                    if entry_idx >= len(day_df):
+                        continue
                     entry_p = trade_info['entry_price']
                     
                     for i in range(entry_idx + 1, len(day_df)):
@@ -807,6 +841,13 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                             trade_info['booked_pnl'] += b_q * (trade_info['t1'] - entry_p)
                             trade_info['rem_qty'] -= b_q
                             trade_info['sl'] = entry_p # Risk-free
+                            if trade_info['rem_qty'] <= 0:
+                                trade_info['exit_reason'] = "TARGET_1"
+                                trade_info['exit_price'] = float(trade_info['t1'])
+                                trade_info['exit_time'] = c_t.strftime("%Y-%m-%d %H:%M")
+                                in_trade = False
+                                all_trades.append(trade_info)
+                                break
                             
                         # Stop loss hit
                         if c_l <= trade_info['sl']:
@@ -988,7 +1029,7 @@ SWING_WATCHLIST_50 = [
     'NATIONALUM', 'HINDCOPPER', 'IRFC', 'RVNL', 'HUDCO',
     'ITC', 'WIPRO', 'SBIN', 'BEL', 'HAL', 
     'VEDL', 'HINDALCO', 'TATACHEM', 'TATAPOWER', 'ASHOKLEY',
-    'EXIDEIND', 'AMBUJACEM', 'DLF', 'JIOFIN',
+    'EXIDEIND', 'AMBUJACEM', 'DLF', 'JIOFIN', 'GODREJCP',
     'HDFCBANK', 'ICICIBANK', 'AXISBANK', 'KOTAKBANK', 'BHARTIARTL',
     'SUNPHARMA', 'CIPLA', 'APOLLOTYRE', 'TVSMOTOR', 'CUMMINSIND',
     'VOLTAS', 'HAVELLS', 'JSWSTEEL', 'CHOLAFIN', 'INDHOTEL'
@@ -1006,84 +1047,87 @@ def scan_swing_candidates(capital: float = 5000) -> list:
     signals = []
     
     for s in SWING_WATCHLIST_50:
-        df = stock_dfs.get(s)
-        if df is None or len(df) < 50:
+        try:
+            df = stock_dfs.get(s)
+            if df is None or len(df) < 50:
+                continue
+                
+            c = df['Close'].dropna()
+            h = df['High'].loc[c.index]
+            l = df['Low'].loc[c.index]
+            v = df['Volume'].loc[c.index]
+            
+            price = float(c.iloc[-1])
+            ema20 = compute_ema(c, 20)
+            ema50 = compute_ema(c, 50)
+            ema200 = compute_ema(c, 200)
+            rsi14 = compute_rsi(c, 14)
+            atr14 = compute_atr(h, l, c, 14)
+            avg_v = v.rolling(20).mean()
+            
+            c_ema20 = float(ema20.iloc[-1])
+            c_ema50 = float(ema50.iloc[-1])
+            c_ema200 = float(ema200.iloc[-1]) if len(c) >= 200 else c_ema50
+            c_rsi = float(rsi14.iloc[-1])
+            c_vol = float(v.iloc[-1])
+            c_avg_vol = float(avg_v.iloc[-1])
+            c_atr = float(atr14.iloc[-1])
+            
+            high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
+            vol_multiplier = c_vol / c_avg_vol if c_avg_vol > 0 else 1.0
+            
+            # 1. Breakout setup
+            if (price >= high_20 * 0.995 and 
+                price > c_ema50 and 
+                c_ema50 > c_ema200 and
+                52 <= c_rsi <= 72 and 
+                vol_multiplier >= 1.2):
+                
+                sl = round(price * 0.965, 2)
+                t1 = round(price * 1.06, 2)
+                t2 = round(price * 1.10, 2)
+                qty = max(1, int(capital / price))
+                
+                signals.append({
+                    'symbol': s,
+                    'price': round(price, 2),
+                    'type': 'BREAKOUT',
+                    'setup': '20-Day High Breakout + Volume Surge',
+                    'rsi': round(c_rsi, 1),
+                    'vol_surge': f"{vol_multiplier:.1f}x",
+                    'sl': sl,
+                    't1': t1,
+                    't2': t2,
+                    'qty': qty,
+                    'score': round(vol_multiplier * 10 + (price / high_20) * 10, 1)
+                })
+                
+            # 2. Bull Trend Dip Buy
+            elif (price > c_ema200 and 
+                  c_ema50 > c_ema200 and 
+                  abs(price - c_ema20) / c_ema20 <= 0.02 and 
+                  42 <= c_rsi <= 55):
+                  
+                sl = round(price * 0.96, 2)
+                t1 = round(price * 1.05, 2)
+                t2 = round(price * 1.08, 2)
+                qty = max(1, int(capital / price))
+                
+                signals.append({
+                    'symbol': s,
+                    'price': round(price, 2),
+                    'type': 'DIP_BUY',
+                    'setup': '20 EMA Pullback Bounce (Bull Trend)',
+                    'rsi': round(c_rsi, 1),
+                    'vol_surge': f"{vol_multiplier:.1f}x",
+                    'sl': sl,
+                    't1': t1,
+                    't2': t2,
+                    'qty': qty,
+                    'score': round(15.0 + (55 - c_rsi), 1)
+                })
+        except Exception:
             continue
-            
-        c = df['Close'].dropna()
-        h = df['High'].loc[c.index]
-        l = df['Low'].loc[c.index]
-        v = df['Volume'].loc[c.index]
-        
-        price = float(c.iloc[-1])
-        ema20 = compute_ema(c, 20)
-        ema50 = compute_ema(c, 50)
-        ema200 = compute_ema(c, 200)
-        rsi14 = compute_rsi(c, 14)
-        atr14 = compute_atr(h, l, c, 14)
-        avg_v = v.rolling(20).mean()
-        
-        c_ema20 = float(ema20.iloc[-1])
-        c_ema50 = float(ema50.iloc[-1])
-        c_ema200 = float(ema200.iloc[-1]) if len(c) >= 200 else c_ema50
-        c_rsi = float(rsi14.iloc[-1])
-        c_vol = float(v.iloc[-1])
-        c_avg_vol = float(avg_v.iloc[-1])
-        c_atr = float(atr14.iloc[-1])
-        
-        high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
-        vol_multiplier = c_vol / c_avg_vol if c_avg_vol > 0 else 1.0
-        
-        # 1. Breakout setup
-        if (price >= high_20 * 0.995 and 
-            price > c_ema50 and 
-            c_ema50 > c_ema200 and
-            52 <= c_rsi <= 72 and 
-            vol_multiplier >= 1.2):
-            
-            sl = round(price * 0.965, 2)
-            t1 = round(price * 1.06, 2)
-            t2 = round(price * 1.10, 2)
-            qty = max(1, int(capital / price))
-            
-            signals.append({
-                'symbol': s,
-                'price': round(price, 2),
-                'type': 'BREAKOUT',
-                'setup': '20-Day High Breakout + Volume Surge',
-                'rsi': round(c_rsi, 1),
-                'vol_surge': f"{vol_multiplier:.1f}x",
-                'sl': sl,
-                't1': t1,
-                't2': t2,
-                'qty': qty,
-                'score': round(vol_multiplier * 10 + (price / high_20) * 10, 1)
-            })
-            
-        # 2. Bull Trend Dip Buy
-        elif (price > c_ema200 and 
-              c_ema50 > c_ema200 and 
-              abs(price - c_ema20) / c_ema20 <= 0.02 and 
-              42 <= c_rsi <= 55):
-              
-            sl = round(price * 0.96, 2)
-            t1 = round(price * 1.05, 2)
-            t2 = round(price * 1.08, 2)
-            qty = max(1, int(capital / price))
-            
-            signals.append({
-                'symbol': s,
-                'price': round(price, 2),
-                'type': 'DIP_BUY',
-                'setup': '20 EMA Pullback Bounce (Bull Trend)',
-                'rsi': round(c_rsi, 1),
-                'vol_surge': f"{vol_multiplier:.1f}x",
-                'sl': sl,
-                't1': t1,
-                't2': t2,
-                'qty': qty,
-                'score': round(15.0 + (55 - c_rsi), 1)
-            })
 
     signals.sort(key=lambda x: x['score'], reverse=True)
     return signals

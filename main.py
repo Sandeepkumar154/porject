@@ -1,4 +1,5 @@
 import os
+import tempfile
 import socket
 import json
 import asyncio
@@ -9,7 +10,7 @@ from datetime import datetime
 import pytz
 from typing import Optional, List
 from pydantic import BaseModel
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 import yfinance as yf
 
@@ -27,15 +28,22 @@ from sentiment import get_market_sentiment, fetch_india_vix
 
 app = FastAPI(title='Master Trading Plan v2 — Improved', version='2.1.0')
 
+API_SECRET_KEY = os.environ.get('API_SECRET_KEY', 'changeme-trading-bot-2026')
+
+def verify_api_key(request: Request):
+    key = request.headers.get('X-API-Key', '') or request.query_params.get('api_key', '')
+    if key != API_SECRET_KEY:
+        raise HTTPException(status_code=403, detail='Invalid API key')
+
 # Environment variables: rigorously validate to reject dummy/truncated tokens from Render env
-_HARDCODED_TOKEN = '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk'
+_HARDCODED_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk')
 _env_tok = (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
 if len(_env_tok) >= 40 and ':' in _env_tok:
     TELEGRAM_BOT_TOKEN = _env_tok
 else:
     TELEGRAM_BOT_TOKEN = _HARDCODED_TOKEN
 
-_SANDEEP_CHAT_ID = '1221493262'
+_SANDEEP_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1221493262')
 _env_chat = (os.environ.get('TELEGRAM_CHAT_ID') or '').strip()
 if _env_chat and _env_chat.lstrip('-').isdigit() and not _env_chat.startswith('864951'):
     TELEGRAM_CHAT_ID = _env_chat
@@ -65,8 +73,10 @@ def _save_alerted_entries(alerted_set: set):
     """Save alerted entries for today."""
     try:
         today_str = datetime.now(IST).strftime('%Y-%m-%d')
-        with open(ALERTED_FILE, 'w') as f:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(ALERTED_FILE), suffix='.tmp')
+        with os.fdopen(tmp_fd, 'w') as f:
             json.dump({'date': today_str, 'alerts': list(alerted_set)}, f)
+        os.replace(tmp_path, ALERTED_FILE)
     except Exception:
         pass
 
@@ -92,8 +102,10 @@ def _load_active_positions() -> dict:
 def _save_active_positions(positions: dict):
     """Save active tracked positions to file."""
     try:
-        with open(POSITIONS_FILE, 'w') as f:
-            json.dump(positions, f, indent=2)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(POSITIONS_FILE), suffix='.tmp')
+        with os.fdopen(tmp_fd, 'w') as f:
+            json.dump(positions, f, indent=2, default=str)
+        os.replace(tmp_path, POSITIONS_FILE)
     except Exception as e:
         print(f"Error saving active positions: {e}")
 
@@ -141,8 +153,6 @@ def _send_telegram_message(text: str) -> bool:
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             return response.status == 200
     except Exception as e:
@@ -322,7 +332,10 @@ def check_active_positions(price_map: dict):
     if not active_positions:
         return
         
-    if not is_market_open():
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    # Allow square-off until 15:35, even though market closes at 15:30
+    if not is_market_open() and not (now.hour == 15 and 30 <= now.minute <= 35):
         # STRICT PROTECTION: Never evaluate exits or square-offs outside live market hours!
         return
         
@@ -624,12 +637,15 @@ def _load_morning_greeted() -> str:
 
 def _save_morning_greeted(date_str: str):
     try:
-        with open(MORNING_GREETED_FILE, 'w') as f:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(MORNING_GREETED_FILE), suffix='.tmp')
+        with os.fdopen(tmp_fd, 'w') as f:
             json.dump({'date': date_str}, f)
+        os.replace(tmp_path, MORNING_GREETED_FILE)
     except Exception:
         pass
 
 sent_session_updates = set()
+_scan_lock = asyncio.Lock()
 
 async def background_market_scanner():
     """Continuous automated background scanner during market hours (QUIET & DISCIPLINED)."""
@@ -640,11 +656,25 @@ async def background_market_scanner():
             now = datetime.now(IST)
             today_str = now.strftime('%Y-%m-%d')
             
+            from datetime import timedelta
+            yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+            global sent_session_updates
+            sent_session_updates = {k for k in sent_session_updates if k.startswith(today_str) or k.startswith(yesterday_str)}
+
+            # 2b. Friday Weekly Paper Trading Report (15:30 - 15:45 IST)
+            friday_paper_key = f"{today_str}_FRIDAY_PAPER_REPORT"
+            if friday_paper_key not in sent_session_updates and now.weekday() == 4 and now.hour == 15 and 30 <= now.minute <= 45:
+                sent_session_updates.add(friday_paper_key)
+                try:
+                    import paper_trading
+                    rep = paper_trading.generate_weekly_paper_report()
+                    _send_telegram_message(rep)
+                except Exception as e:
+                    print(f"Error sending Friday paper report: {e}")
+            
             if is_market_open():
                 # 0. Daily Morning Heartbeat Message (Sends once every morning when market opens)
-                if _load_morning_greeted() != today_str:
-                    _save_morning_greeted(today_str)
-                    sent_session_updates.add(f"{today_str}_MORNING")
+                if now.hour == 9 and now.minute <= 30 and _load_morning_greeted() != today_str:
                     greeting_msg = (
                         "🌅 <b>Good Morning Sandeep!</b>\n\n"
                         "🤖 <b>I am LIVE & monitoring the market.</b>\n"
@@ -652,7 +682,9 @@ async def background_market_scanner():
                         "🛡️ Capital: ₹5,000 | 1 Trade Max (Strict Discipline)\n\n"
                         "✨ <i>Hoping for a great and profitable trade today! Have a wonderful day.</i>"
                     )
-                    _send_telegram_message(greeting_msg)
+                    if _send_telegram_message(greeting_msg):
+                        _save_morning_greeted(today_str)
+                        sent_session_updates.add(f"{today_str}_MORNING")
 
                 # 1. STRICT DEAD ZONE (12:00 - 14:00 IST): Trading strictly paused!
                 if 12 <= now.hour < 14:
@@ -721,86 +753,76 @@ async def background_market_scanner():
                     except Exception as swe:
                         print(f"Error in swing scan: {swe}")
 
-                # 2b. Friday Weekly Paper Trading Report (15:35 IST) — Full Weekly P&L Audit
-                friday_paper_key = f"{today_str}_FRIDAY_PAPER_REPORT"
-                if friday_paper_key not in sent_session_updates and now.weekday() == 4 and now.hour == 15 and now.minute >= 35:
-                    sent_session_updates.add(friday_paper_key)
+                # 3. Live scan across watchlist
+                async with _scan_lock:
+                    result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
+                    stocks = result.get('stocks', [])
+                    price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
+                    
+                    # Check active intraday positions for T1, T2, SL, or 3:20 PM close
+                    check_active_positions(price_map)
+    
+                    # Check active swing positions against live market prices
                     try:
                         import paper_trading
-                        rep = paper_trading.generate_weekly_paper_report()
-                        _send_telegram_message(rep)
-                    except Exception as e:
-                        print(f"Error sending Friday paper report: {e}")
-
-                # 3. Live scan across watchlist
-                result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
-                stocks = result.get('stocks', [])
-                price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
-                
-                # Check active intraday positions for T1, T2, SL, or 3:20 PM close
-                check_active_positions(price_map)
-
-                # Check active swing positions against live market prices
-                try:
-                    import paper_trading
-                    active_swings = paper_trading.get_paper_account().get("swing", {}).get("active_positions", [])
-                    if active_swings:
-                        swing_price_map = {}
-                        for pos in active_swings:
-                            sym = pos["symbol"]
-                            if sym in price_map:
-                                swing_price_map[sym] = price_map[sym]
-                            else:
-                                from engine import fetch_stock_data_direct
-                                sdf = fetch_stock_data_direct(sym, period="1d", interval="5m")
-                                if sdf is not None and not sdf.empty:
-                                    swing_price_map[sym] = float(sdf['Close'].iloc[-1])
-                        
-                        if swing_price_map:
-                            swing_events = paper_trading.check_swing_positions(swing_price_map)
-                            for ev in swing_events:
-                                if ev["type"] == "SWING_EXIT":
-                                    s_exit_msg = (
-                                        f"🔴 <b>LIVE SWING TRADE EXITED — {ev['reason']}</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"⏰ <b>Exit Executed At:</b> {ev['exit_time']}\n"
-                                        f"🎯 <b>Stock:</b> <b>{ev['symbol']}</b>\n"
-                                        f"🏁 <b>Reason:</b> {ev['reason']}\n"
-                                        f"💵 <b>Exit Price:</b> ₹{ev['exit_price']:.2f}\n"
-                                        f"💸 <b>DP Charges & Taxes:</b> -₹20.00\n"
-                                        f"📈 <b>Net Realised P&L:</b> <b>{'+' if ev['net_pnl'] >= 0 else ''}₹{ev['net_pnl']:.2f}</b>\n"
-                                        f"💼 <b>Updated Swing Capital:</b> <b>₹{ev['new_balance']:,.2f}</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━"
-                                    )
-                                    _send_telegram_message(s_exit_msg)
-                                elif ev["type"] == "SWING_T1":
-                                    s_t1_msg = (
-                                        f"🎯 <b>LIVE SWING TARGET 1 HIT (+5.5%) — {ev['symbol']}</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"⏰ <b>Executed At:</b> {ev['exit_time']}\n"
-                                        f"💰 <b>Current Price:</b> ₹{ev['exit_price']:.2f}\n"
-                                        f"🛡️ <b>Stop-Loss Moved to Cost:</b> ₹{ev['sl_moved']:.2f} (Trade is 100% Risk-Free)\n"
-                                        f"🎯 <b>Target 2 in View (+9.0%)</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━"
-                                    )
-                                    _send_telegram_message(s_t1_msg)
-                except Exception as se:
-                    print(f"Error checking swing positions: {se}")
-                
-                # 4. Only alert new entry if within valid trading window (STRICTLY before 14:45 IST)
-                # Never take an intraday MIS entry after 2:45 PM since broker square-off is at 3:15-3:20 PM!
-                window = get_current_window()
-                can_enter = (
-                    window.get('active', False) and
-                    window.get('name') != 'DEAD_ZONE' and
-                    (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
-                    len(active_positions) < MAX_ACTIVE_POSITIONS and
-                    len(alerted_entries_today) < MAX_DAILY_TRADES
-                )
-                if can_enter:
-                    entries = [s for s in stocks if s.get('is_entry')]
-                    if entries:
-                        _send_telegram_alert(entries)
+                        active_swings = paper_trading.get_paper_account().get("swing", {}).get("active_positions", [])
+                        if active_swings:
+                            swing_price_map = {}
+                            for pos in active_swings:
+                                sym = pos["symbol"]
+                                if sym in price_map:
+                                    swing_price_map[sym] = price_map[sym]
+                                else:
+                                    from engine import fetch_stock_data_direct
+                                    sdf = fetch_stock_data_direct(sym, period="1d", interval="5m")
+                                    if sdf is not None and not sdf.empty:
+                                        swing_price_map[sym] = float(sdf['Close'].iloc[-1])
+                            
+                            if swing_price_map:
+                                swing_events = paper_trading.check_swing_positions(swing_price_map)
+                                for ev in swing_events:
+                                    if ev["type"] == "SWING_EXIT":
+                                        s_exit_msg = (
+                                            f"🔴 <b>LIVE SWING TRADE EXITED — {ev['reason']}</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                            f"⏰ <b>Exit Executed At:</b> {ev['exit_time']}\n"
+                                            f"🎯 <b>Stock:</b> <b>{ev['symbol']}</b>\n"
+                                            f"🏁 <b>Reason:</b> {ev['reason']}\n"
+                                            f"💵 <b>Exit Price:</b> ₹{ev['exit_price']:.2f}\n"
+                                            f"💸 <b>DP Charges & Taxes:</b> -₹20.00\n"
+                                            f"📈 <b>Net Realised P&L:</b> <b>{'+' if ev['net_pnl'] >= 0 else ''}₹{ev['net_pnl']:.2f}</b>\n"
+                                            f"💼 <b>Updated Swing Capital:</b> <b>₹{ev['new_balance']:,.2f}</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━"
+                                        )
+                                        _send_telegram_message(s_exit_msg)
+                                    elif ev["type"] == "SWING_T1":
+                                        s_t1_msg = (
+                                            f"🎯 <b>LIVE SWING TARGET 1 HIT (+5.5%) — {ev['symbol']}</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                            f"⏰ <b>Executed At:</b> {ev['exit_time']}\n"
+                                            f"💰 <b>Current Price:</b> ₹{ev['exit_price']:.2f}\n"
+                                            f"🛡️ <b>Stop-Loss Moved to Cost:</b> ₹{ev['sl_moved']:.2f} (Trade is 100% Risk-Free)\n"
+                                            f"🎯 <b>Target 2 in View (+9.0%)</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━"
+                                        )
+                                        _send_telegram_message(s_t1_msg)
+                    except Exception as se:
+                        print(f"Error checking swing positions: {se}")
+                    
+                    # 4. Only alert new entry if within valid trading window (STRICTLY before 14:45 IST)
+                    # Never take an intraday MIS entry after 2:45 PM since broker square-off is at 3:15-3:20 PM!
+                    window = get_current_window()
+                    can_enter = (
+                        window.get('active', False) and
+                        window.get('name') != 'DEAD_ZONE' and
+                        (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+                        len(active_positions) < MAX_ACTIVE_POSITIONS and
+                        len(alerted_entries_today) < MAX_DAILY_TRADES
+                    )
+                    if can_enter:
+                        entries = [s for s in stocks if s.get('is_entry')]
+                        if entries:
+                            _send_telegram_alert(entries)
                     
                 await asyncio.sleep(60) # Scan every 1 minute during market hours
             else:
@@ -818,7 +840,7 @@ async def weekly_self_tune():
         try:
             now = datetime.now(IST)
             # Check if it's Sunday (weekday 6) and around 8 PM
-            if now.weekday() == 6 and now.hour == 20 and now.minute < 5:
+            if now.weekday() == 6 and now.hour == 20 and now.minute < 15:
                 print("[Self-Tune] Sunday 8 PM — Starting weekly self-tune cycle...")
                 
                 _send_telegram_message(
@@ -867,12 +889,15 @@ async def weekly_self_tune():
             print(f"Self-tune scheduler error: {e}")
             await asyncio.sleep(300)
 
+_background_tasks = []
+
 @app.on_event("startup")
 async def startup_event():
     # Start auto-scanner in background
-    asyncio.create_task(background_market_scanner())
+    t1 = asyncio.create_task(background_market_scanner())
     # Start weekly self-tune scheduler
-    asyncio.create_task(weekly_self_tune())
+    t2 = asyncio.create_task(weekly_self_tune())
+    _background_tasks.extend([t1, t2])
 
 DASHBOARD_HTML = '''<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -1423,35 +1448,36 @@ async def run_live_scan(symbols: Optional[str] = None):
         pass
 
     sym_list = [s.strip().upper() for s in symbols.split(',')] if symbols else DEFAULT_WATCHLIST
-    result = scan_watchlist(sym_list, TOTAL_CAPITAL)
-    stocks = result.get('stocks', [])
-    price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
-    
-    # STRICT MARKET HOURS PROTECTION:
-    # If markets are closed (weekends, holidays, or after hours), return scan data for display only!
-    # NEVER trigger new entries, exits, or telegram alerts outside market hours!
-    if not is_market_open():
+    async with _scan_lock:
+        result = scan_watchlist(sym_list, TOTAL_CAPITAL)
+        stocks = result.get('stocks', [])
+        price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
+        
+        # STRICT MARKET HOURS PROTECTION:
+        # If markets are closed (weekends, holidays, or after hours), return scan data for display only!
+        # NEVER trigger new entries, exits, or telegram alerts outside market hours!
+        if not is_market_open():
+            return result
+            
+        # 1. Evaluate open active positions for T1, T2, SL, or square-off
+        check_active_positions(price_map)
+        
+        # 2. Alert new entries (only if within valid trading window before 14:45 IST)
+        entries = [s for s in stocks if s.get('is_entry')]
+        if entries and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            now = datetime.now(IST)
+            window = get_current_window()
+            can_enter = (
+                window.get('active', False) and
+                window.get('name') != 'DEAD_ZONE' and
+                (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+                len(active_positions) < MAX_ACTIVE_POSITIONS and
+                len(alerted_entries_today) < MAX_DAILY_TRADES
+            )
+            if can_enter:
+                _send_telegram_alert(entries)
+            
         return result
-        
-    # 1. Evaluate open active positions for T1, T2, SL, or square-off
-    check_active_positions(price_map)
-    
-    # 2. Alert new entries (only if within valid trading window before 14:45 IST)
-    entries = [s for s in stocks if s.get('is_entry')]
-    if entries and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        now = datetime.now(IST)
-        window = get_current_window()
-        can_enter = (
-            window.get('active', False) and
-            window.get('name') != 'DEAD_ZONE' and
-            (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
-            len(active_positions) < MAX_ACTIVE_POSITIONS and
-            len(alerted_entries_today) < MAX_DAILY_TRADES
-        )
-        if can_enter:
-            _send_telegram_alert(entries)
-        
-    return result
 
 @app.post('/api/backtest')
 async def run_mobile_backtest(req: BacktestRequest):
@@ -1539,8 +1565,9 @@ async def get_groww_account():
         return {'connected': False, 'error': str(e)}
 
 @app.post('/api/groww/refresh')
-async def refresh_groww_session():
+async def refresh_groww_session(request: Request):
     """Force generate a fresh Groww session access token."""
+    verify_api_key(request)
     try:
         from groww_manager import refresh_groww_token
         return refresh_groww_token()
@@ -1595,8 +1622,9 @@ async def get_trade_log(days: Optional[int] = 7):
         return {'error': str(e), 'trades': []}
 
 @app.post('/api/tune/run')
-async def manual_tune_trigger():
+async def manual_tune_trigger(request: Request):
     """Manually trigger a self-tune cycle (for testing)."""
+    verify_api_key(request)
     try:
         report = run_weekly_tune(capital=TOTAL_CAPITAL)
         if report:
@@ -1614,16 +1642,18 @@ async def get_active_positions():
     }
 
 @app.post('/api/positions/clear')
-async def clear_active_positions():
+async def clear_active_positions(request: Request):
     """Clear all active tracked positions."""
+    verify_api_key(request)
     global active_positions
     active_positions.clear()
     _save_active_positions(active_positions)
     return {'success': True, 'count': 0}
 
 @app.post('/api/positions/test')
-async def test_position_trigger(symbol: str = 'SBIN', entry: float = 800.0, t1: float = 810.0, t2: float = 820.0, sl: float = 790.0, qty: int = 2):
+async def test_position_trigger(request: Request, symbol: str = 'SBIN', entry: float = 800.0, t1: float = 810.0, t2: float = 820.0, sl: float = 790.0, qty: int = 2):
     """Create a mock test position to test target/SL triggers."""
+    verify_api_key(request)
     active_positions[symbol] = {
         'symbol': symbol,
         'entry_price': entry,
@@ -1664,8 +1694,9 @@ async def trigger_paper_report():
         return {'success': False, 'error': str(e)}
 
 @app.post('/api/paper/reset')
-async def reset_paper_account():
+async def reset_paper_account(request: Request):
     """Reset the paper trading account back to fresh initial capital (Rs. 5,000 Intraday + Rs. 5,000 Swing)."""
+    verify_api_key(request)
     try:
         import paper_trading
         account = paper_trading.init_paper_account(force_reset=True)

@@ -201,7 +201,7 @@ def calculate_performance(trades: list) -> dict:
     }
 
 ## 5. Fast Mini-Backtest for Grid Search
-def mini_backtest(symbols: list, params: dict, period: str = '30d', capital: float = 5000) -> dict:
+def mini_backtest(symbols: list, params: dict, period: str = '30d', capital: float = 5000, cached_data: dict = None) -> dict:
     """Run a simplified, fast backtest with the given params."""
     import yfinance as yf
     try:
@@ -222,22 +222,25 @@ def mini_backtest(symbols: list, params: dict, period: str = '30d', capital: flo
     
     for symbol in symbols:
         try:
-            ticker = symbol + '.NS' if not symbol.endswith('.NS') else symbol
-            df = yf.download(ticker, period=period, interval='5m', progress=False)
-            if df.empty:
-                continue
-
-            df['RSI'] = compute_rsi(df)
-            df['EMA9'] = compute_ema(df, 9)
-            df['EMA21'] = compute_ema(df, 21)
-            df['EMA50'] = compute_ema(df, 50)
-            df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = compute_macd(df)
-            df['ADX'] = compute_adx(df)
-            df['ATR'] = compute_atr(df)
-            df['Supertrend'] = compute_supertrend(df)
-            df['VWAP'] = compute_vwap(df)
-            
-            df = df.dropna()
+            if cached_data is not None and symbol in cached_data:
+                df = cached_data[symbol].copy()
+            else:
+                ticker = symbol + '.NS' if not symbol.endswith('.NS') else symbol
+                df = yf.download(ticker, period=period, interval='5m', progress=False)
+                if df.empty:
+                    continue
+    
+                df['RSI'] = compute_rsi(df)
+                df['EMA9'] = compute_ema(df, 9)
+                df['EMA21'] = compute_ema(df, 21)
+                df['EMA50'] = compute_ema(df, 50)
+                df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = compute_macd(df)
+                df['ADX'] = compute_adx(df)
+                df['ATR'] = compute_atr(df)
+                df['Supertrend'] = compute_supertrend(df)
+                df['VWAP'] = compute_vwap(df)
+                
+                df = df.dropna()
             
             in_trade = False
             entry_price = 0
@@ -309,10 +312,40 @@ def find_best_params(symbols: list = None, capital: float = 5000) -> tuple:
     if symbols is None:
         symbols = ['HDFCBANK', 'SBIN', 'INFY', 'RELIANCE', 'TATAMOTORS', 'ICICIBANK', 'WIPRO', 'AXISBANK']
         
+    import yfinance as yf
+    try:
+        from engine import (compute_rsi, compute_ema, compute_macd, compute_bollinger_bands,
+                            compute_adx, compute_atr, compute_supertrend, compute_vwap)
+    except ImportError:
+        def compute_rsi(df, period=14): return pd.Series(np.random.randint(30, 80, size=len(df)), index=df.index)
+        def compute_ema(df, period): return df['Close'].rolling(period).mean()
+        def compute_macd(df): return df['Close'], df['Close'], pd.Series(np.random.randn(len(df)), index=df.index)
+        def compute_bollinger_bands(df): return df['Close'], df['Close'], df['Close']
+        def compute_adx(df): return pd.Series(np.random.randint(10, 50, size=len(df)), index=df.index)
+        def compute_atr(df): return df['Close'] * 0.01
+        def compute_supertrend(df): return pd.Series(np.ones(len(df)), index=df.index)
+        def compute_vwap(df): return df['Close']
+        
+    cached_data = {}
+    for symbol in symbols:
+        ticker = symbol + '.NS' if not symbol.endswith('.NS') else symbol
+        df = yf.download(ticker, period='30d', interval='5m', progress=False)
+        if not df.empty:
+            df['RSI'] = compute_rsi(df)
+            df['EMA9'] = compute_ema(df, 9)
+            df['EMA21'] = compute_ema(df, 21)
+            df['EMA50'] = compute_ema(df, 50)
+            df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = compute_macd(df)
+            df['ADX'] = compute_adx(df)
+            df['ATR'] = compute_atr(df)
+            df['Supertrend'] = compute_supertrend(df)
+            df['VWAP'] = compute_vwap(df)
+            cached_data[symbol] = df.dropna()
+
     current_params = load_tuned_params()
     best_params = current_params.copy()
     
-    current_perf = mini_backtest(symbols, current_params, period='30d', capital=capital)
+    current_perf = mini_backtest(symbols, current_params, period='30d', capital=capital, cached_data=cached_data)
     best_perf = current_perf
     
     for param_name, bounds in PARAM_BOUNDS.items():
@@ -331,7 +364,7 @@ def find_best_params(symbols: list = None, capital: float = 5000) -> tuple:
                 val = round(val, 4)
             test_params[param_name] = val
             
-            perf = mini_backtest(symbols, test_params, period='30d', capital=capital)
+            perf = mini_backtest(symbols, test_params, period='30d', capital=capital, cached_data=cached_data)
             
             if perf['net_pnl'] > best_perf['net_pnl'] and perf['win_rate'] >= best_perf['win_rate'] - 2.0:
                 # Accept slightly lower win rate if PnL is much better, else strict
@@ -340,7 +373,7 @@ def find_best_params(symbols: list = None, capital: float = 5000) -> tuple:
                 
         best_params[param_name] = best_val
         
-    final_perf = mini_backtest(symbols, best_params, period='30d', capital=capital)
+    final_perf = mini_backtest(symbols, best_params, period='30d', capital=capital, cached_data=cached_data)
     return best_params, final_perf, current_perf
 
 ## 7. Acceptance Gate
@@ -429,21 +462,6 @@ def generate_weekly_report(trades: list, current_perf: dict, new_perf: dict,
         
     return report
 
-## 10. GitHub Auto-Push
-def auto_push_to_github() -> bool:
-    """Push tuned_params.json and tune_history.json to GitHub."""
-    cwd = os.path.dirname(__file__)
-    try:
-        subprocess.run(["git", "add", "tuned_params.json", "tune_history.json", "trade_log.json"], cwd=cwd, check=True)
-        commit_msg = f"Auto-tune: Update parameters ({datetime.now().strftime('%Y-%m-%d')})"
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd, check=True)
-        subprocess.run(["git", "push", "origin", "main"], cwd=cwd, check=True)
-        return True
-    except subprocess.CalledProcessError:
-        return False
-    except FileNotFoundError:
-        return False
-
 ## 11. Main Orchestrator
 def run_weekly_tune(capital: float = 5000, symbols: list = None) -> str:
     """Main entry point for the weekly self-tune cycle."""
@@ -465,7 +483,6 @@ def run_weekly_tune(capital: float = 5000, symbols: list = None) -> str:
 
     if accepted:
         save_tuned_params(new_params, source='weekly_tune')
-        auto_push_to_github()
         save_tune_history(version + 1, new_params, new_perf, accepted, reasons)
     else:
         save_tune_history(version, new_params, new_perf, accepted, reasons)

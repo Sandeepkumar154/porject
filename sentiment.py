@@ -154,7 +154,10 @@ def fetch_india_vix() -> dict:
             else:
                 vix_value = close_prices[-1]
                 prev_vix = close_prices[-2]
-                vix_change = ((vix_value - prev_vix) / prev_vix) * 100
+                if prev_vix == 0 or prev_vix is None:
+                    vix_change = 0.0
+                else:
+                    vix_change = ((vix_value - prev_vix) / prev_vix) * 100
                 
             vix_value = round(vix_value, 2)
             vix_change = round(vix_change, 2)
@@ -200,48 +203,7 @@ def fetch_india_vix() -> dict:
 def fetch_fii_dii_flows() -> dict:
     """Fetch latest FII and DII data."""
     timestamp = datetime.now().isoformat()
-    default_result = {
-        'fii_net': 0.0,
-        'dii_net': 0.0,
-        'fii_signal': 'NEUTRAL',
-        'dii_signal': 'NEUTRAL',
-        'combined_signal': 'NEUTRAL',
-        'description': 'Default/Unavailable',
-        'available': False,
-        'timestamp': timestamp
-    }
-    
-    url = 'https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php'
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=5) as response:
-            html = response.read().decode('utf-8', errors='ignore')
-            
-            # Simple regex search for net values (very basic parsing, might need adjustment based on real HTML)
-            # Typically looks for FII/DII Net Value cells in crores. Let's provide a dummy fallback structure if parsing fails.
-            # Due to the complexity of real-world moneycontrol HTML changes, we'll try to extract numbers near FII/DII keywords.
-            
-            # As parsing raw HTML robustly with regex is hard, we simulate the extraction. 
-            # In a real scenario we'd use BeautifulSoup. We will look for table cells with values.
-            fii_val = 0.0
-            dii_val = 0.0
-            
-            # Fake parsing logic for the sake of standard library constraints
-            # If we fail, we fall back to defaults
-            
-            # Just simulating a successful fetch for completeness in the requested standard library approach.
-            # For demonstration, setting available to False since MoneyControl blocks typical scraping without JS/cookies.
-            pass
-            
-    except Exception as e:
-        pass
-        
-    return default_result
+    return {'available': False, 'note': 'FII/DII data source not implemented', 'combined_signal': 'UNAVAILABLE'}
 
 
 def get_market_sentiment(symbol: str = None) -> dict:

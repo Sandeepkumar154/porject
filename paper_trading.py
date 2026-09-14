@@ -108,6 +108,14 @@ def save_paper_account(account: Dict[str, Any]) -> bool:
 def record_paper_entry(symbol: str, price: float, qty: int, sl: float, t1: float, t2: float, setup: str = "15m ORB Breakout") -> Dict[str, Any]:
     """Execute real-time Intraday entry with exact timestamp."""
     account = get_paper_account()
+    if account['intraday'].get('active_trade'):
+        return {'status': 'error', 'message': 'Already have an active intraday trade. Close it first.'}
+
+    order_value = price * qty
+    margin_required = order_value / 5.0  # MIS 5x leverage
+    if margin_required > account['intraday']['current_balance']:
+        return {'status': 'error', 'message': f'Insufficient intraday margin. Need ₹{margin_required:.0f}, have ₹{account["intraday"]["current_balance"]:.0f}'}
+
     now_str = get_ist_now_str()
     iso_str = get_ist_iso_str()
     
@@ -195,6 +203,9 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
             "trade": trade
         }
     else:
+        partial_proceeds = exit_qty * (exit_price - entry_price) - 45.0
+        intra['current_balance'] += partial_proceeds
+        intra['realised_pnl'] += partial_proceeds
         save_paper_account(account)
         return {
             "success": True,
@@ -223,7 +234,9 @@ def record_swing_entry(symbol: str, price: float, qty: int, sl: float, t1: float
     
     # Check if swing balance allows this purchase
     if trade_value > avail + 50.0:
-        qty = max(1, int(avail / price))
+        qty = int(avail / price)
+        if qty < 1:
+            return {'status': 'error', 'message': f'Insufficient swing capital (₹{avail:.0f}) for {symbol} @ ₹{price:.0f}'}
         trade_value = round(float(price) * qty, 2)
         
     trade = {
@@ -362,6 +375,7 @@ def check_swing_positions(price_map: Dict[str, float]) -> List[Dict[str, Any]]:
         # 1. Target 2 Hit (Close full)
         if curr_p >= t2:
             res = record_swing_exit(sym, curr_p, "TARGET_2_HIT")
+            account = get_paper_account()
             if res.get("success"):
                 events.append({
                     "type": "SWING_EXIT",
@@ -381,7 +395,11 @@ def check_swing_positions(price_map: Dict[str, float]) -> List[Dict[str, Any]]:
             if total_qty > 1:
                 booked_qty = max(1, total_qty // 2)
                 res = record_swing_exit(sym, curr_p, "TARGET_1_PARTIAL", exit_qty=booked_qty)
-                pos["remaining_qty"] = total_qty - booked_qty
+                account = get_paper_account()
+                for p in account.get("swing", {}).get("active_positions", []):
+                    if p["symbol"] == sym:
+                        pos = p
+                        break
             pos["t1_hit"] = True
             pos["sl"] = pos["entry_price"]  # Move SL to cost (Risk-free)
             save_paper_account(account)
@@ -400,6 +418,7 @@ def check_swing_positions(price_map: Dict[str, float]) -> List[Dict[str, Any]]:
         if curr_p <= sl:
             reason = "TRAILED_SL_HIT" if t1_hit else "STOP_LOSS_HIT"
             res = record_swing_exit(sym, curr_p, reason)
+            account = get_paper_account()
             if res.get("success"):
                 events.append({
                     "type": "SWING_EXIT",
