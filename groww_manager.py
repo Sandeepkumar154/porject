@@ -7,15 +7,18 @@ from typing import Optional, Dict, Any, Tuple
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "groww_token.json")
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "groww_credentials.json")
 
+FALLBACK_API_KEY = "eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjI1NzczMzg4ODUsImlhdCI6MTc4ODkzODg4NSwibmJmIjoxNzg4OTM4ODg1LCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCI1ZDRjMDE4MC00NmRkLTQ4NDgtYjk3Ni0yYWU2MGRhN2FhNThcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiYTg4ODYzZjgtOThjNS00ZGFmLThhNmQtNTJkNDlmYjMyZTA4XCIsXCJkZXZpY2VJZFwiOlwiMTNiNzM5MWItMmM3NS01NTJmLTgyYTktNzYxOGE3OWIwZWEwXCIsXCJzZXNzaW9uSWRcIjpcIjIyMWU2Y2Y2LTAwZmMtNDAzNC1iYzczLTFkNTU0NzM2Njk5ZlwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYk9RZWhjRFFNeTl3bjFtc2RMTWVLUzVSTkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcImF1dGgtdG90cFwiLFwic291cmNlSXBBZGRyZXNzXCI6XCIxMTUuOTcuMTYuMTMxLDE3Mi43MC4yMTguOTgsMzUuMjQxLjIzLjEyM1wiLFwidHdvRmFFeHBpcnlUc1wiOjI1NzczMzg4ODU3NzEsXCJ2ZW5kb3JOYW1lXCI6XCJncm93d0FwaVwifSIsImlzcyI6ImFwZXgtYXV0aC1wcm9kLWFwcCJ9.jr4ab7G1HlLU7unLxHmHlWobUh3D5lydbu9szdZf-Vjw2H1TKod_AiSIXi5viSt3XC_pgJc5m7tANct-ogVifg"
+FALLBACK_API_SECRET = "E&W-AUiByZ#FyWcqtcCd2c*#Q499DTP7"
+
 def get_credentials() -> Tuple[Optional[str], Optional[str]]:
     """
     Get Groww API Key and API Secret.
-    Checks environment variables first, then local credentials file.
+    Checks environment variables first, then local credentials file, then hardcoded fallback.
     """
     api_key = os.environ.get("GROWW_API_KEY")
     api_secret = os.environ.get("GROWW_SECRET")
     
-    if api_key and api_secret:
+    if api_key and api_secret and len(api_key.strip()) > 20 and len(api_secret.strip()) > 5:
         return api_key.strip(), api_secret.strip()
         
     if os.path.exists(CREDENTIALS_FILE):
@@ -29,7 +32,7 @@ def get_credentials() -> Tuple[Optional[str], Optional[str]]:
         except Exception:
             pass
             
-    return None, None
+    return FALLBACK_API_KEY, FALLBACK_API_SECRET
 
 def get_groww_token() -> Optional[str]:
     """Load the daily Groww access token from file or environment."""

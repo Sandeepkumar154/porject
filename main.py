@@ -35,20 +35,20 @@ def verify_api_key(request: Request):
     if key != API_SECRET_KEY:
         raise HTTPException(status_code=403, detail='Invalid API key')
 
-# Environment variables: rigorously validate to reject dummy/truncated tokens from Render env
-_HARDCODED_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk')
+# Environment variables: rigorously validate to reject empty/dummy/truncated tokens from Render env
+_FALLBACK_TOKEN = '8649513530:AAHgwOOrmHz9WNrWw-b3OUQtBevM-zSDAXk'
 _env_tok = (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
 if len(_env_tok) >= 40 and ':' in _env_tok:
     TELEGRAM_BOT_TOKEN = _env_tok
 else:
-    TELEGRAM_BOT_TOKEN = _HARDCODED_TOKEN
+    TELEGRAM_BOT_TOKEN = _FALLBACK_TOKEN
 
-_SANDEEP_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1221493262')
+_FALLBACK_CHAT_ID = '1221493262'
 _env_chat = (os.environ.get('TELEGRAM_CHAT_ID') or '').strip()
 if _env_chat and _env_chat.lstrip('-').isdigit() and not _env_chat.startswith('864951'):
     TELEGRAM_CHAT_ID = _env_chat
 else:
-    TELEGRAM_CHAT_ID = _SANDEEP_CHAT_ID
+    TELEGRAM_CHAT_ID = _FALLBACK_CHAT_ID
 
 TOTAL_CAPITAL = float(os.environ.get('TOTAL_CAPITAL') or '5000')
 
@@ -673,14 +673,15 @@ async def background_market_scanner():
                     print(f"Error sending Friday paper report: {e}")
             
             if is_market_open():
-                # 0. Daily Morning Heartbeat Message (Sends once every morning when market opens)
-                if now.hour == 9 and now.minute <= 30 and _load_morning_greeted() != today_str:
+                # 0. Daily Market Heartbeat Message (Sends once every trading day when bot is live)
+                if _load_morning_greeted() != today_str:
                     greeting_msg = (
                         "🌅 <b>Good Morning Sandeep!</b>\n\n"
                         "🤖 <b>I am LIVE & monitoring the market.</b>\n"
                         "📈 Strategy: 15m ORB + Volume Shocker\n"
-                        "🛡️ Capital: ₹5,000 | 1 Trade Max (Strict Discipline)\n\n"
-                        "✨ <i>Hoping for a great and profitable trade today! Have a wonderful day.</i>"
+                        "🛡️ Capital: ₹5,000 Intraday + ₹5,000 Swing\n"
+                        "📊 Live Status: Actively scanning 50 stocks & Nifty regime\n\n"
+                        "✨ <i>Hoping for a great and disciplined trading day!</i>"
                     )
                     if _send_telegram_message(greeting_msg):
                         _save_morning_greeted(today_str)
