@@ -82,6 +82,32 @@ def _save_alerted_entries(alerted_set: set):
 
 alerted_entries_today = _load_alerted_entries()
 
+NEAR_MISS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'near_misses.jsonl')
+_last_heartbeat_hour = -1
+
+def _log_near_miss(stock_result: dict, window_name: str):
+    """Log near-miss candidates (Score 18-23 or 6+ shields) for the 30-day statistical review."""
+    try:
+        entry = {
+            "timestamp": datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
+            "symbol": stock_result.get('symbol'),
+            "price": stock_result.get('price'),
+            "score": stock_result.get('score'),
+            "base_score": stock_result.get('base_score'),
+            "grade": stock_result.get('grade'),
+            "rvol": stock_result.get('rvol'),
+            "vwap": stock_result.get('vwap'),
+            "rsi": stock_result.get('rsi'),
+            "window": window_name,
+            "failed_shields": [
+                name for name, s in stock_result.get('shields', {}).items() if not s.get('passed')
+            ]
+        }
+        with open(NEAR_MISS_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        print(f"Error logging near-miss: {e}")
+
 def _load_active_positions() -> dict:
     """Load active tracked intraday positions from file."""
     if not os.path.exists(POSITIONS_FILE):
@@ -828,6 +854,40 @@ async def background_market_scanner():
                     # 4. Only alert new entry if within valid trading window (STRICTLY before 14:45 IST)
                     # Never take an intraday MIS entry after 2:45 PM since broker square-off is at 3:15-3:20 PM!
                     window = get_current_window()
+
+                    # Log near-miss candidates (Score 18-23 or 6+ shields) for Option C evaluation
+                    near_misses_found = []
+                    for s in stocks:
+                        if not s.get('is_entry') and s.get('score', 0) >= 18:
+                            near_misses_found.append(s.get('symbol'))
+                            _log_near_miss(s, window.get('name', 'UNKNOWN'))
+
+                    # Hourly Telegram Heartbeat (Sent once per hour during market hours)
+                    global _last_heartbeat_hour
+                    if now.hour != _last_heartbeat_hour:
+                        _last_heartbeat_hour = now.hour
+                        try:
+                            import paper_trading
+                            acc = paper_trading.get_paper_account()
+                            intra_acc = acc.get('intraday', {})
+                            active_tr = intra_acc.get('active_trade')
+                            vix_val = fetch_india_vix() or "N/A"
+                            near_str = ", ".join(near_misses_found[:3]) if near_misses_found else "None"
+                            hb_msg = (
+                                f"💓 <b>BOT HEARTBEAT — {now.strftime('%I:%M %p IST')}</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"🟢 <b>Status:</b> Live & Scanning (Render Active)\n"
+                                f"🕒 <b>Window:</b> {window.get('name', 'UNKNOWN')} | <b>India VIX:</b> {vix_val}\n"
+                                f"🔍 <b>Scanned:</b> {len(stocks)} stocks every 60s\n"
+                                f"💼 <b>Intraday Book:</b> ₹{intra_acc.get('current_balance', 5000.0):,.2f} | <b>Open Trade:</b> {active_tr['symbol'] if active_tr else 'None'}\n"
+                                f"⚡ <b>Near-Misses This Hour:</b> {near_str}\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"🛡️ <i>Option C 30-Day Forward Incubation Active (0.3% Slippage Penalty Enforced)</i>"
+                            )
+                            _send_telegram_message(hb_msg)
+                        except Exception as hbe:
+                            print(f"Error sending heartbeat: {hbe}")
+
                     can_enter = (
                         window.get('active', False) and
                         window.get('name') != 'DEAD_ZONE' and

@@ -10,6 +10,7 @@ ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_a
 # Groww exact fee structures:
 INTRADAY_ROUND_TRIP_FEE = 45.0  # Rs. 40 flat brokerage (buy+sell) + Rs. 5 STT/GST/exchange
 SWING_SELL_FEE = 20.0          # Groww Delivery: Rs. 0 brokerage, ~Rs. 20 DP charges + STT on sell
+SLIPPAGE_PCT_PER_LEG = 0.0015  # 0.15% adverse slippage on entry and exit (0.30% round-trip penalty)
 
 def get_ist_now_str() -> str:
     """Return formatted live IST timestamp."""
@@ -111,7 +112,9 @@ def record_paper_entry(symbol: str, price: float, qty: int, sl: float, t1: float
     if account['intraday'].get('active_trade'):
         return {'status': 'error', 'message': 'Already have an active intraday trade. Close it first.'}
 
-    order_value = price * qty
+    raw_price = round(float(price), 2)
+    slipped_entry_price = round(raw_price * (1.0 + SLIPPAGE_PCT_PER_LEG), 2)
+    order_value = slipped_entry_price * qty
     margin_required = order_value / 5.0  # MIS 5x leverage
     if margin_required > account['intraday']['current_balance']:
         return {'status': 'error', 'message': f'Insufficient intraday margin. Need ₹{margin_required:.0f}, have ₹{account["intraday"]["current_balance"]:.0f}'}
@@ -125,9 +128,11 @@ def record_paper_entry(symbol: str, price: float, qty: int, sl: float, t1: float
         "setup": setup,
         "executed_time": now_str,
         "entry_iso": iso_str,
-        "entry_price": round(float(price), 2),
+        "entry_price": slipped_entry_price,
+        "raw_entry_price": raw_price,
+        "slippage_pct": round(SLIPPAGE_PCT_PER_LEG * 2 * 100, 2),
         "qty": int(qty),
-        "trade_value": round(float(price) * int(qty), 2),
+        "trade_value": round(slipped_entry_price * int(qty), 2),
         "sl": round(float(sl), 2),
         "t1": round(float(t1), 2),
         "t2": round(float(t2), 2),
@@ -141,7 +146,7 @@ def record_paper_entry(symbol: str, price: float, qty: int, sl: float, t1: float
     return trade
 
 def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty: Optional[int] = None) -> Dict[str, Any]:
-    """Close out Intraday trade, deduct Groww fees (Rs. 45), update balance."""
+    """Close out Intraday trade with 0.15% adverse exit slippage, deduct Groww fees (Rs. 45), update balance."""
     account = get_paper_account()
     intra = account.get("intraday", {})
     trade = intra.get("active_trade")
@@ -152,9 +157,11 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
     now_str = get_ist_now_str()
     iso_str = get_ist_iso_str()
     entry_price = trade["entry_price"]
+    raw_exit_price = round(float(exit_price), 2)
+    slipped_exit_price = round(raw_exit_price * (1.0 - SLIPPAGE_PCT_PER_LEG), 2)
     qty_to_close = exit_qty if exit_qty and exit_qty <= trade["remaining_qty"] else trade["remaining_qty"]
     
-    leg_pnl = round(qty_to_close * (exit_price - entry_price), 2)
+    leg_pnl = round(qty_to_close * (slipped_exit_price - entry_price), 2)
     trade["booked_gross"] = round(trade.get("booked_gross", 0.0) + leg_pnl, 2)
     trade["remaining_qty"] -= qty_to_close
     
@@ -166,7 +173,8 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
         
         trade["exit_time"] = now_str
         trade["exit_iso"] = iso_str
-        trade["exit_price"] = round(float(exit_price), 2)
+        trade["exit_price"] = slipped_exit_price
+        trade["raw_exit_price"] = raw_exit_price
         trade["exit_reason"] = exit_reason
         trade["status"] = "CLOSED"
         trade["gross_pnl"] = gross_pnl
@@ -203,7 +211,7 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
             "trade": trade
         }
     else:
-        partial_proceeds = exit_qty * (exit_price - entry_price) - 45.0
+        partial_proceeds = exit_qty * (slipped_exit_price - entry_price) - 45.0
         intra['current_balance'] += partial_proceeds
         intra['realised_pnl'] += partial_proceeds
         save_paper_account(account)
