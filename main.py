@@ -1186,13 +1186,97 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         <div class="p-2 bg-slate-950 border border-slate-800 rounded font-mono text-emerald-400 text-center font-bold text-xs select-all" x-text="'http://' + (status.local_ip || 'loading...') + ':8000'"></div>
       </div>
     </div>
+
+    <!-- TAB 5: PORTFOLIO (DUAL-BOOK PAPER TRADING) -->
+    <div x-show="activeTab === 'portfolio'" x-transition class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-slate-100">Paper Trading Portfolio</h2>
+          <p class="text-xs text-slate-400">Dual-Book Ledger (₹10,000 Capital)</p>
+        </div>
+        <button @click="fetchPaper()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center space-x-1">
+          <span>🔄 Refresh</span>
+        </button>
+      </div>
+
+      <!-- Intraday Book Card -->
+      <div class="p-3.5 bg-slate-900 border border-slate-800 rounded-xl space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <span class="text-base">⚡</span>
+            <div>
+              <div class="font-bold text-slate-100 text-xs">Intraday Book (15m ORB + Shocker)</div>
+              <div class="text-[10px] text-slate-400 font-mono">MIS 5x Leverage • 1 Trade/Day Max</div>
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">₹5,000 Book</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs pt-1">
+          <div class="bg-slate-950 p-2 rounded border border-slate-800">
+            <div class="text-[10px] text-slate-400">Cash Available</div>
+            <div class="font-bold font-mono text-slate-100 text-sm">₹<span x-text="(paperData.intraday?.current_balance || 5000).toFixed(2)"></span></div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded border border-slate-800">
+            <div class="text-[10px] text-slate-400">Active MIS Trades</div>
+            <div class="font-bold font-mono text-blue-400 text-sm" x-text="paperData.intraday?.active_trade ? '1 ACTIVE' : '0 (Safe in Cash)'"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Swing Book Card -->
+      <div class="p-3.5 bg-slate-900 border border-slate-800 rounded-xl space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <span class="text-base">📈</span>
+            <div>
+              <div class="font-bold text-slate-100 text-xs">Swing Book (Daily Breakout / 20 EMA Dip)</div>
+              <div class="text-[10px] text-slate-400 font-mono">CNC Delivery • Multi-Day Holdings</div>
+            </div>
+          </div>
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">₹5,000 Book</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs pt-1">
+          <div class="bg-slate-950 p-2 rounded border border-slate-800">
+            <div class="text-[10px] text-slate-400">Cash Remaining</div>
+            <div class="font-bold font-mono text-slate-100 text-sm">₹<span x-text="(paperData.swing?.current_balance || 0).toFixed(2)"></span></div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded border border-slate-800">
+            <div class="text-[10px] text-slate-400">Holdings Count</div>
+            <div class="font-bold font-mono text-emerald-400 text-sm"><span x-text="(paperData.swing?.active_positions || []).length"></span> Stocks Held</div>
+          </div>
+        </div>
+
+        <!-- Swing Holdings List -->
+        <div class="space-y-1.5 pt-1">
+          <div class="text-[11px] font-bold text-slate-300">Active Swing Positions:</div>
+          <template x-for="sp in (paperData.swing?.active_positions || [])" :key="sp.symbol">
+            <div class="p-2.5 bg-slate-950 rounded-lg border border-slate-800 text-[11px] flex items-center justify-between">
+              <div>
+                <div class="font-bold text-slate-100 flex items-center space-x-1.5">
+                  <span x-text="sp.symbol"></span>
+                  <span class="text-[9px] text-emerald-400 font-mono font-semibold" x-text="sp.qty + ' share'"></span>
+                </div>
+                <div class="text-[10px] text-slate-400 font-mono mt-0.5">
+                  Entry: ₹<span x-text="sp.entry_price"></span> • <span x-text="sp.executed_time"></span>
+                </div>
+              </div>
+              <div class="text-right font-mono text-[10px]">
+                <div class="text-emerald-400 font-semibold">T1: ₹<span x-text="sp.t1"></span></div>
+                <div class="text-rose-400">SL: ₹<span x-text="sp.sl"></span></div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
   </main>
-  <nav class="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-3 py-2">
-    <div class="max-w-md mx-auto grid grid-cols-4 gap-1 text-center">
-      <button @click="activeTab = 'scanner'" class="py-1.5 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'scanner' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-lg">📡</span><span class="text-[10px] mt-0.5">Scanner</span></button>
-      <button @click="activeTab = 'global'" class="py-1.5 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'global' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-lg">🌍</span><span class="text-[10px] mt-0.5">Global</span></button>
-      <button @click="activeTab = 'backtest'" class="py-1.5 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'backtest' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-lg">📊</span><span class="text-[10px] mt-0.5">Backtest</span></button>
-      <button @click="activeTab = 'settings'" class="py-1.5 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'settings' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-lg">⚙️</span><span class="text-[10px] mt-0.5">Settings</span></button>
+  <nav class="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-2 py-2">
+    <div class="max-w-md mx-auto grid grid-cols-5 gap-1 text-center">
+      <button @click="activeTab = 'scanner'" class="py-1 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'scanner' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-base">📡</span><span class="text-[9px] mt-0.5">Scanner</span></button>
+      <button @click="activeTab = 'portfolio'" class="py-1 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'portfolio' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-base">💼</span><span class="text-[9px] mt-0.5">Portfolio</span></button>
+      <button @click="activeTab = 'global'" class="py-1 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'global' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-base">🌍</span><span class="text-[9px] mt-0.5">Global</span></button>
+      <button @click="activeTab = 'backtest'" class="py-1 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'backtest' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-base">📊</span><span class="text-[9px] mt-0.5">Backtest</span></button>
+      <button @click="activeTab = 'settings'" class="py-1 rounded-lg flex flex-col items-center justify-center transition" :class="activeTab === 'settings' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'"><span class="text-base">⚙️</span><span class="text-[9px] mt-0.5">Settings</span></button>
     </div>
   </nav>
   <script>
@@ -1203,6 +1287,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         globalData: {},
         fiiData: {},
         scanData: {},
+        paperData: {},
         positions: [],
         growwAccount: {},
         isScanning: false,
@@ -1216,6 +1301,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         get entryStocks() { return (this.scanData.stocks || []).filter(s => s.is_entry); },
         async init() {
           await this.fetchStatus();
+          await this.fetchPaper();
           await this.fetchGlobal();
           await this.fetchFII();
           await this.fetchPositions();
@@ -1224,6 +1310,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
           setInterval(() => { if (this.activeTab === 'scanner') { this.fetchScan(true); this.fetchPositions(); } }, 30000);
         },
         async fetchStatus() { try { const r = await fetch('/api/status'); this.status = await r.json(); } catch(e) { console.error('Status fetch failed', e); } },
+        async fetchPaper() { try { const r = await fetch('/api/paper'); this.paperData = await r.json(); } catch(e) { console.error('Paper fetch failed', e); } },
         async fetchGlobal() { try { const r = await fetch('/api/global'); this.globalData = await r.json(); } catch(e) { console.error('Global fetch failed', e); } },
         async fetchFII() { try { const r = await fetch('/api/fii'); this.fiiData = await r.json(); } catch(e) { console.error('FII fetch failed', e); } },
         async fetchPositions() { try { const r = await fetch('/api/positions'); const d = await r.json(); this.positions = d.positions || []; } catch(e) { console.error('Positions fetch failed', e); } },

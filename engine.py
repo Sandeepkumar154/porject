@@ -371,16 +371,16 @@ def check_nifty_regime() -> dict:
             can_long = True
             can_short = False
             desc = f"Nifty Bullish (+{today_gain:.2f}%)"
-        elif today_gain <= -0.15:
+        elif today_gain <= -0.25:
             regime = 'BEARISH'
             can_long = False
             can_short = True
             desc = f"Nifty Bearish ({today_gain:.2f}%)"
         else:
             regime = 'CHOPPY'
-            can_long = False
+            can_long = True  # Flat market: allow individual stock breakouts that meet strict criteria
             can_short = False
-            desc = f"Nifty Choppy ({today_gain:+.2f}%) — Flat"
+            desc = f"Nifty Neutral ({today_gain:+.2f}%) — Stock-Specific"
             
         return {
             'regime': regime,
@@ -467,6 +467,18 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     c_ema50 = float(ema50.iloc[latest].item() if hasattr(ema50.iloc[latest], 'item') else ema50.iloc[latest])
     c_vol = float(volume.iloc[latest].item() if hasattr(volume.iloc[latest], 'item') else volume.iloc[latest])
     c_avg_vol = float(avg_volume.iloc[latest].item() if hasattr(avg_volume.iloc[latest], 'item') else avg_volume.iloc[latest])
+    # Fix: Yahoo Finance returns 0.0 volume on the current incomplete 15m candle snapshot.
+    # Check the latest completed candle(s) so institutional surge is accurately measured even right after a new bar opens.
+    if c_vol <= 0 and len(volume) >= 3:
+        v_prev = float(volume.iloc[-2].item() if hasattr(volume.iloc[-2], 'item') else volume.iloc[-2])
+        v_closed = float(volume.iloc[-3].item() if hasattr(volume.iloc[-3], 'item') else volume.iloc[-3])
+        c_vol = max(v_prev, v_closed)
+        if len(avg_volume) >= 3:
+            c_avg_vol = float(avg_volume.iloc[-3].item() if hasattr(avg_volume.iloc[-3], 'item') else avg_volume.iloc[-3])
+    elif c_vol <= 0 and len(volume) >= 2:
+        c_vol = float(volume.iloc[-2].item() if hasattr(volume.iloc[-2], 'item') else volume.iloc[-2])
+        if len(avg_volume) >= 2:
+            c_avg_vol = float(avg_volume.iloc[-2].item() if hasattr(avg_volume.iloc[-2], 'item') else avg_volume.iloc[-2])
     c_atr = float(atr.iloc[latest].item() if hasattr(atr.iloc[latest], 'item') else atr.iloc[latest])
 
     shield_res = evaluate_shields(
