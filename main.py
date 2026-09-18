@@ -671,7 +671,22 @@ async def background_market_scanner():
                     _send_telegram_message(rep)
                 except Exception as e:
                     print(f"Error sending Friday paper report: {e}")
-            
+
+            # 0a. Daily 9:00 AM Groww API Session Auto-Activation
+            groww_refresh_key = f"{today_str}_GROWW_AUTO_REFRESH"
+            if groww_refresh_key not in sent_session_updates and (now.hour == 9 or (now.hour == 8 and now.minute >= 50)):
+                sent_session_updates.add(groww_refresh_key)
+                try:
+                    from groww_manager import refresh_groww_token
+                    res = await asyncio.to_thread(refresh_groww_token)
+                    if res.get("success"):
+                        print(f"[Groww] Daily session auto-activated for {today_str}")
+                        _send_telegram_message(f"🌱 <b>Groww API Connected Automatically</b>\n\nDaily session token generated for {today_str}.\nAccount UCC: 3552685723 | Broker feeds ready.")
+                    else:
+                        print(f"[Groww] Auto-refresh notice: {res.get('message')}")
+                except Exception as ge:
+                    print(f"[Groww] Auto-refresh error: {ge}")
+
             if is_market_open():
                 # 0. Daily Market Heartbeat Message (Sends once every trading day when bot is live)
                 if _load_morning_greeted() != today_str:
@@ -894,6 +909,14 @@ _background_tasks = []
 
 @app.on_event("startup")
 async def startup_event():
+    # Ensure Groww daily session token is refreshed immediately on server boot
+    try:
+        from groww_manager import ensure_daily_token
+        asyncio.create_task(asyncio.to_thread(ensure_daily_token))
+        print("[Startup] Groww daily token check initiated.")
+    except Exception as e:
+        print(f"[Startup] Groww init error: {e}")
+
     # Start auto-scanner in background
     t1 = asyncio.create_task(background_market_scanner())
     # Start weekly self-tune scheduler
