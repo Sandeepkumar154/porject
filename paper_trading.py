@@ -11,6 +11,53 @@ ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_a
 INTRADAY_ROUND_TRIP_FEE = 45.0  # Rs. 40 flat brokerage (buy+sell) + Rs. 5 STT/GST/exchange
 SWING_SELL_FEE = 20.0          # Groww Delivery: Rs. 0 brokerage, ~Rs. 20 DP charges + STT on sell
 SLIPPAGE_PCT_PER_LEG = 0.0015  # 0.15% adverse slippage on entry and exit (0.30% round-trip penalty)
+TRADE_LEDGER_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_book.csv")
+
+def append_trade_to_ledger(trade: dict):
+    """Append a closed trade to the permanent, immutable trade_book.csv audit ledger."""
+    try:
+        import csv
+        file_exists = os.path.exists(TRADE_LEDGER_CSV) and os.path.getsize(TRADE_LEDGER_CSV) > 0
+        fields = [
+            "trade_id", "date", "book", "symbol", "setup",
+            "entry_time", "entry_price", "raw_entry_price", "slippage_pct",
+            "qty", "trade_value", "sl", "t1", "t2",
+            "exit_time", "exit_price", "raw_exit_price", "exit_reason",
+            "gross_pnl", "brokerage_and_taxes", "net_pnl", "return_pct", "is_win"
+        ]
+        with open(TRADE_LEDGER_CSV, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            if not file_exists:
+                writer.writeheader()
+            
+            row = {
+                "trade_id": trade.get("trade_id", f"{trade.get('symbol')}_{datetime.now().strftime('%Y%m%d%H%M%S')}"),
+                "date": trade.get("entry_iso", "")[:10] if trade.get("entry_iso") else datetime.now(IST).strftime('%Y-%m-%d'),
+                "book": trade.get("book", "INTRADAY"),
+                "symbol": trade.get("symbol", ""),
+                "setup": trade.get("setup", ""),
+                "entry_time": trade.get("executed_time", ""),
+                "entry_price": trade.get("entry_price", 0.0),
+                "raw_entry_price": trade.get("raw_entry_price", trade.get("entry_price", 0.0)),
+                "slippage_pct": trade.get("slippage_pct", 0.3),
+                "qty": trade.get("qty", 0),
+                "trade_value": trade.get("trade_value", 0.0),
+                "sl": trade.get("sl", 0.0),
+                "t1": trade.get("t1", 0.0),
+                "t2": trade.get("t2", 0.0),
+                "exit_time": trade.get("exit_time", ""),
+                "exit_price": trade.get("exit_price", 0.0),
+                "raw_exit_price": trade.get("raw_exit_price", trade.get("exit_price", 0.0)),
+                "exit_reason": trade.get("exit_reason", ""),
+                "gross_pnl": trade.get("gross_pnl", 0.0),
+                "brokerage_and_taxes": trade.get("brokerage", 45.0),
+                "net_pnl": trade.get("net_pnl", 0.0),
+                "return_pct": trade.get("return_pct", 0.0),
+                "is_win": trade.get("is_winner", False)
+            }
+            writer.writerow(row)
+    except Exception as e:
+        print(f"Error appending trade to ledger: {e}")
 
 def get_ist_now_str() -> str:
     """Return formatted live IST timestamp."""
@@ -200,6 +247,7 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
         intra["active_trade"] = None
         
         save_paper_account(account)
+        append_trade_to_ledger(trade)
         return {
             "success": True,
             "fully_closed": True,
@@ -336,6 +384,7 @@ def record_swing_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
         
         active_positions.pop(matching_idx)
         save_paper_account(account)
+        append_trade_to_ledger(trade)
         return {
             "success": True,
             "fully_closed": True,
@@ -522,3 +571,64 @@ def generate_weekly_paper_report() -> str:
         
     report += "\n🛡️ <i>100% honest tracking with real-time timestamps. Zero real money at risk.</i>"
     return report
+
+def generate_monthly_report() -> dict:
+    """Generate exhaustive month-end trade audit report from trade_book.csv and paper_account.json."""
+    account = get_paper_account()
+    intra = account.get("intraday", {})
+    swing = account.get("swing", {})
+    
+    # Load all trades from CSV ledger or history
+    trades = []
+    if os.path.exists(TRADE_LEDGER_CSV):
+        try:
+            import csv
+            with open(TRADE_LEDGER_CSV, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                trades = list(reader)
+        except Exception:
+            pass
+            
+    # If CSV is empty, fall back to JSON trades history
+    if not trades:
+        trades = intra.get("trades_history", []) + swing.get("trades_history", [])
+        
+    total_trades = len(trades)
+    winning_trades = sum(1 for t in trades if float(t.get("net_pnl", 0.0)) > 0)
+    losing_trades = sum(1 for t in trades if float(t.get("net_pnl", 0.0)) <= 0)
+    win_rate = round((winning_trades / total_trades * 100), 1) if total_trades > 0 else 0.0
+    
+    gross_pnl = round(sum(float(t.get("gross_pnl", 0.0)) for t in trades), 2)
+    brokerage = round(sum(float(t.get("brokerage_and_taxes", t.get("brokerage", 0.0))) for t in trades), 2)
+    net_pnl = round(sum(float(t.get("net_pnl", 0.0)) for t in trades), 2)
+    
+    wins = [float(t.get("net_pnl", 0.0)) for t in trades if float(t.get("net_pnl", 0.0)) > 0]
+    losses = [abs(float(t.get("net_pnl", 0.0))) for t in trades if float(t.get("net_pnl", 0.0)) <= 0]
+    avg_win = round(sum(wins) / len(wins), 2) if wins else 0.0
+    avg_loss = round(sum(losses) / len(losses), 2) if losses else 0.0
+    
+    # Mathematical Expectancy: E = (WinRate * AvgWin) - (LossRate * AvgLoss)
+    p_win = winning_trades / total_trades if total_trades > 0 else 0.0
+    p_loss = losing_trades / total_trades if total_trades > 0 else 0.0
+    expectancy = round((p_win * avg_win) - (p_loss * avg_loss), 2)
+    
+    profit_factor = round(sum(wins) / sum(losses), 2) if losses and sum(losses) > 0 else ("Inf" if wins else 0.0)
+    
+    return {
+        "report_type": "MONTH_END_REAL_AUDIT",
+        "generated_at": get_ist_now_str(),
+        "total_initial_capital": 10000.0,
+        "total_current_balance": account.get("total_current_balance", 10000.0),
+        "total_realised_pnl": net_pnl,
+        "gross_pnl": gross_pnl,
+        "total_brokerage_paid": brokerage,
+        "total_trades": total_trades,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "win_rate_pct": win_rate,
+        "average_win": avg_win,
+        "average_loss": avg_loss,
+        "expectancy_per_trade": expectancy,
+        "profit_factor": profit_factor,
+        "trades": trades
+    }

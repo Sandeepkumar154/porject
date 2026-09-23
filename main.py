@@ -718,7 +718,7 @@ async def background_market_scanner():
                         f"📊 <b>Today's Intraday P&L:</b> {'+' if today_pnl >= 0 else ''}₹{today_pnl:.2f}\n"
                         f"🎯 <b>Total Intraday Trades:</b> {intra_acc.get('total_trades', 0)}\n"
                         f"📦 <b>Active Swing Positions ({len(active_swings)}):</b> {swing_names}\n"
-                        f"🌱 <b>Groww Broker:</b> Connected (UCC: 3552685723)\n"
+                        f"🌱 <b>Groww Broker:</b> Connected (UCC: ******5723)\n"
                         f"🔍 <b>Market Universe Scanned:</b> 120+ Top Liquid NSE Stocks\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"✨ <i>Bot is standing by quietly until tomorrow 9:15 AM IST.</i>"
@@ -736,7 +736,7 @@ async def background_market_scanner():
                     res = await asyncio.to_thread(refresh_groww_token)
                     if res.get("success"):
                         print(f"[Groww] Daily session auto-activated for {today_str}")
-                        _send_telegram_message(f"🌱 <b>Groww API Connected Automatically</b>\n\nDaily session token generated for {today_str}.\nAccount UCC: 3552685723 | Broker feeds ready.")
+                        _send_telegram_message(f"🌱 <b>Groww API Connected Automatically</b>\n\nDaily session token generated for {today_str}.\nAccount UCC: ******5723 | Broker feeds ready.")
                     else:
                         print(f"[Groww] Auto-refresh notice: {res.get('message')}")
                 except Exception as ge:
@@ -751,7 +751,7 @@ async def background_market_scanner():
                         "📈 Strategy: 15m ORB + Volume Shocker\n"
                         "🛡️ Capital: ₹5,000 Intraday + ₹5,000 Swing\n"
                         "🔍 Universe: Actively scanning 120+ top liquid NSE stocks & Nifty regime\n"
-                        "🌱 Groww Broker: Connected (UCC: 3552685723)\n\n"
+                        "🌱 Groww Broker: Connected (UCC: ******5723)\n\n"
                         "✨ <i>Hoping for a great and disciplined trading day!</i>"
                     )
                     if _send_telegram_message(greeting_msg):
@@ -1746,6 +1746,15 @@ async def refresh_groww_session(request: Request):
         return refresh_groww_token()
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+@app.get('/api/monthly-report')
+async def get_monthly_report():
+    """Get verifiable month-end trade audit report with expectancy, win rate, and all ledger trades."""
+    try:
+        import paper_trading
+        return paper_trading.generate_monthly_report()
+    except Exception as e:
+        return {'error': str(e)}
 
 @app.get('/api/sentiment')
 async def get_sentiment(symbol: Optional[str] = None):

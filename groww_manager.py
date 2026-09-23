@@ -195,9 +195,12 @@ def get_account_summary() -> Dict[str, Any]:
         holdings_list = holdings_res.get("holdings", []) if holdings_res else []
         positions_list = positions_res.get("positions", []) if positions_res else []
 
+        raw_ucc = str(profile.get("ucc", "")) if profile else ""
+        masked_ucc = f"******{raw_ucc[-4:]}" if len(raw_ucc) >= 4 else "******"
+
         return {
             "connected": True,
-            "ucc": profile.get("ucc", "Unknown") if profile else "Unknown",
+            "ucc": masked_ucc,
             "segments": profile.get("active_segments", []) if profile else [],
             "clear_cash": clear_cash,
             "total_holdings_count": len(holdings_list),
@@ -220,9 +223,11 @@ def get_account_summary() -> Dict[str, Any]:
                 margin = client.get_available_margin_details()
                 holdings_res = client.get_holdings_for_user()
                 positions_res = client.get_positions_for_user()
+                retry_ucc = str(profile.get("ucc", "")) if profile else ""
+                retry_masked_ucc = f"******{retry_ucc[-4:]}" if len(retry_ucc) >= 4 else "******"
                 return {
                     "connected": True,
-                    "ucc": profile.get("ucc", "Unknown") if profile else "Unknown",
+                    "ucc": retry_masked_ucc,
                     "segments": profile.get("active_segments", []) if profile else [],
                     "clear_cash": margin.get("clear_cash", 0.0) if margin else 0.0,
                     "total_holdings_count": len(holdings_res.get("holdings", [])),
