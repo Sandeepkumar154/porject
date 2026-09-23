@@ -90,28 +90,53 @@ NSE_HOLIDAYS_2026 = {
     datetime(2026, 12, 25).date(),  # Christmas
 }
 
-# 50 High-Liquid NSE Stocks for Intraday Scanning
+# 120 High-Liquid NSE Stocks (Wide Market Universe across all sectors)
 DEFAULT_WATCHLIST = [
-    # Banking & Finance (12)
+    # Banking & Financial Services (20)
     'HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK',
-    'BAJFINANCE', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB', 'BANKBARODA',
-    'CHOLAFIN', 'JIOFIN',
-    # IT & Tech (5)
+    'BAJFINANCE', 'BAJAJFINSV', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB',
+    'BANKBARODA', 'CANBK', 'CHOLAFIN', 'JIOFIN', 'SHRIRAMFIN',
+    'MUTHOOTFIN', 'AUBANK', 'BANDHANBNK', 'INDUSINDBK', 'LICHSGFIN',
+
+    # IT & Technology (11)
     'INFY', 'TCS', 'HCLTECH', 'WIPRO', 'TECHM',
-    # Metals & Mining (5)
+    'LTIM', 'PERSISTENT', 'COFORGE', 'MPHASIS', 'KPITTECH', 'TATAELXSI',
+
+    # Metals & Mining (9)
     'TATASTEEL', 'JSWSTEEL', 'HINDALCO', 'VEDL', 'SAIL',
-    # Energy & Power (6)
-    'RELIANCE', 'ONGC', 'NTPC', 'POWERGRID', 'TATAPOWER', 'COALINDIA',
-    # PSU & Infra (5)
+    'JINDALSTEL', 'NMDC', 'NATIONALUM', 'HINDCOPPER',
+
+    # Energy, Oil & Power (15)
+    'RELIANCE', 'ONGC', 'NTPC', 'POWERGRID', 'TATAPOWER',
+    'COALINDIA', 'BPCL', 'IOC', 'ADANIENT', 'ADANIPORTS',
+    'ADANIPOWER', 'ADANIGREEN', 'NHPC', 'SJVN', 'IREDA',
+
+    # Defense, PSU & Infrastructure (16)
     'GAIL', 'BEL', 'HAL', 'IRFC', 'LT',
-    # Pharma & Healthcare (3)
-    'SUNPHARMA', 'CIPLA', 'APOLLOHOSP',
-    # Auto & Manufacturing (4)
-    'MARUTI', 'TVSMOTOR', 'ASHOKLEY', 'EXIDEIND',
-    # FMCG & Consumer (4)
-    'HINDUNILVR', 'ITC', 'BHARTIARTL', 'DLF',
-    # Others (6)
-    'SUZLON', 'BHEL', 'RECLTD', 'PFC', 'NATIONALUM', 'VOLTAS'
+    'BHEL', 'RECLTD', 'PFC', 'CONCOR', 'BOSCHLTD',
+    'SIEMENS', 'ABB', 'CUMMINSIND', 'MAZDOCK', 'COCHINSHIP', 'BDL',
+
+    # Pharma, Chemicals & Healthcare (16)
+    'SUNPHARMA', 'CIPLA', 'APOLLOHOSP', 'DRREDDY', 'DIVISLAB',
+    'LUPIN', 'AUROPHARMA', 'ZYDUSLIFE', 'BIOCON', 'MANKIND',
+    'TORNTPHARM', 'MAXHEALTH', 'PIDILITIND', 'SRF', 'DEEPAKNTR', 'TATACHEM',
+
+    # Auto & Ancillaries (14)
+    'MARUTI', 'TATAMOTORS', 'TVSMOTOR', 'M&M', 'BAJAJ-AUTO',
+    'HEROMOTOCO', 'EICHERMOT', 'ASHOKLEY', 'BHARATFORG', 'EXIDEIND',
+    'AMARAJABAT', 'MOTHERSON', 'BALKRISIND', 'TIINDIA',
+
+    # FMCG, Retail & Consumer (13)
+    'HINDUNILVR', 'ITC', 'NESTLEIND', 'BRITANNIA', 'TATACONSUM',
+    'DABUR', 'MARICO', 'GODREJCP', 'COLPAL', 'VARUNBEV',
+    'TRENT', 'TITAN', 'ZOMATO',
+
+    # Realty, Cement & Telecom (11)
+    'DLF', 'GODREJPROP', 'OBEROIRLTY', 'LODHA', 'ULTRACEMCO',
+    'AMBUJACEM', 'SHREECEM', 'ACC', 'GRASIM', 'BHARTIARTL', 'INDUSTOWER',
+
+    # High-Beta Mid-Caps / Volume Surge Stars (7)
+    'SUZLON', 'VOLTAS', 'POLYCAB', 'KEI', 'DIXON', 'KAYNES', 'CGPOWER'
 ]
 
 # 1. Technical Indicators
@@ -636,7 +661,7 @@ def scan_watchlist(symbols: list, capital: float = 5000) -> dict:
     
     # 2. Parallel scan of stocks with Nifty regime passed
     stocks_res = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         results = list(ex.map(lambda s: scan_stock(s, capital, nifty_regime=nifty_info), symbols))
     stocks_res = [r for r in results if r is not None]
     # Priority sorting: Actionable entries first, then highest Relative Volume (RVOL), then Score, then Profit

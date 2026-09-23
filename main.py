@@ -698,6 +698,35 @@ async def background_market_scanner():
                 except Exception as e:
                     print(f"Error sending Friday paper report: {e}")
 
+            # 2c. Daily 3:30 PM Market Close Summary (Monday - Friday)
+            close_summary_key = f"{today_str}_DAILY_CLOSE_SUMMARY"
+            if close_summary_key not in sent_session_updates and now.hour == 15 and 30 <= now.minute <= 45:
+                sent_session_updates.add(close_summary_key)
+                try:
+                    import paper_trading
+                    acc = paper_trading.get_paper_account()
+                    intra_acc = acc.get('intraday', {})
+                    swing_acc = acc.get('swing', {})
+                    today_pnl = intra_acc.get('realised_pnl', 0.0)
+                    active_swings = swing_acc.get('active_positions', [])
+                    swing_names = ", ".join([p['symbol'] for p in active_swings]) if active_swings else "None"
+                    
+                    close_msg = (
+                        f"🏁 <b>MARKET CLOSED — DAILY SUMMARY ({today_str})</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"💼 <b>Intraday Capital:</b> ₹{intra_acc.get('current_balance', 5000.0):,.2f}\n"
+                        f"📊 <b>Today's Intraday P&L:</b> {'+' if today_pnl >= 0 else ''}₹{today_pnl:.2f}\n"
+                        f"🎯 <b>Total Intraday Trades:</b> {intra_acc.get('total_trades', 0)}\n"
+                        f"📦 <b>Active Swing Positions ({len(active_swings)}):</b> {swing_names}\n"
+                        f"🌱 <b>Groww Broker:</b> Connected (UCC: 3552685723)\n"
+                        f"🔍 <b>Market Universe Scanned:</b> 120+ Top Liquid NSE Stocks\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✨ <i>Bot is standing by quietly until tomorrow 9:15 AM IST.</i>"
+                    )
+                    _send_telegram_message(close_msg)
+                except Exception as ce:
+                    print(f"Error sending daily close summary: {ce}")
+
             # 0a. Daily 9:00 AM Groww API Session Auto-Activation
             groww_refresh_key = f"{today_str}_GROWW_AUTO_REFRESH"
             if groww_refresh_key not in sent_session_updates and (now.hour == 9 or (now.hour == 8 and now.minute >= 50)):
@@ -714,14 +743,15 @@ async def background_market_scanner():
                     print(f"[Groww] Auto-refresh error: {ge}")
 
             if is_market_open():
-                # 0. Daily Market Heartbeat Message (Sends once every trading day when bot is live)
+                # 0. Daily Market Heartbeat Message (Sends once at 9:15 AM when market opens)
                 if _load_morning_greeted() != today_str:
                     greeting_msg = (
                         "🌅 <b>Good Morning Sandeep!</b>\n\n"
                         "🤖 <b>I am LIVE & monitoring the market.</b>\n"
                         "📈 Strategy: 15m ORB + Volume Shocker\n"
                         "🛡️ Capital: ₹5,000 Intraday + ₹5,000 Swing\n"
-                        "📊 Live Status: Actively scanning 50 stocks & Nifty regime\n\n"
+                        "🔍 Universe: Actively scanning 120+ top liquid NSE stocks & Nifty regime\n"
+                        "🌱 Groww Broker: Connected (UCC: 3552685723)\n\n"
                         "✨ <i>Hoping for a great and disciplined trading day!</i>"
                     )
                     if _send_telegram_message(greeting_msg):
@@ -856,37 +886,9 @@ async def background_market_scanner():
                     window = get_current_window()
 
                     # Log near-miss candidates (Score 18-23 or 6+ shields) for Option C evaluation
-                    near_misses_found = []
                     for s in stocks:
                         if not s.get('is_entry') and s.get('score', 0) >= 18:
-                            near_misses_found.append(s.get('symbol'))
                             _log_near_miss(s, window.get('name', 'UNKNOWN'))
-
-                    # Hourly Telegram Heartbeat (Sent once per hour during market hours)
-                    global _last_heartbeat_hour
-                    if now.hour != _last_heartbeat_hour:
-                        _last_heartbeat_hour = now.hour
-                        try:
-                            import paper_trading
-                            acc = paper_trading.get_paper_account()
-                            intra_acc = acc.get('intraday', {})
-                            active_tr = intra_acc.get('active_trade')
-                            vix_val = fetch_india_vix() or "N/A"
-                            near_str = ", ".join(near_misses_found[:3]) if near_misses_found else "None"
-                            hb_msg = (
-                                f"💓 <b>BOT HEARTBEAT — {now.strftime('%I:%M %p IST')}</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🟢 <b>Status:</b> Live & Scanning (Render Active)\n"
-                                f"🕒 <b>Window:</b> {window.get('name', 'UNKNOWN')} | <b>India VIX:</b> {vix_val}\n"
-                                f"🔍 <b>Scanned:</b> {len(stocks)} stocks every 60s\n"
-                                f"💼 <b>Intraday Book:</b> ₹{intra_acc.get('current_balance', 5000.0):,.2f} | <b>Open Trade:</b> {active_tr['symbol'] if active_tr else 'None'}\n"
-                                f"⚡ <b>Near-Misses This Hour:</b> {near_str}\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🛡️ <i>Option C 30-Day Forward Incubation Active (0.3% Slippage Penalty Enforced)</i>"
-                            )
-                            _send_telegram_message(hb_msg)
-                        except Exception as hbe:
-                            print(f"Error sending heartbeat: {hbe}")
 
                     can_enter = (
                         window.get('active', False) and
