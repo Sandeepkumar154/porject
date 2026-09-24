@@ -750,7 +750,7 @@ async def background_market_scanner():
                 except Exception as ce:
                     print(f"Error sending daily close summary: {ce}")
 
-            # 0a. Daily 9:00 AM Groww API Session Auto-Activation
+            # 0a. Daily 9:00 AM Groww API Session Auto-Activation (Silent refresh)
             groww_refresh_key = f"{today_str}_GROWW_AUTO_REFRESH"
             if groww_refresh_key not in sent_session_updates and (now.hour == 9 or (now.hour == 8 and now.minute >= 50)):
                 sent_session_updates.add(groww_refresh_key)
@@ -759,27 +759,26 @@ async def background_market_scanner():
                     res = await asyncio.to_thread(refresh_groww_token)
                     if res.get("success"):
                         print(f"[Groww] Daily session auto-activated for {today_str}")
-                        _send_telegram_message(f"🌱 <b>Groww API Connected Automatically</b>\n\nDaily session token generated for {today_str}.\nAccount UCC: ******5723 | Broker feeds ready.")
                     else:
                         print(f"[Groww] Auto-refresh notice: {res.get('message')}")
                 except Exception as ge:
                     print(f"[Groww] Auto-refresh error: {ge}")
 
             if is_market_open():
-                # 0. Daily Market Heartbeat Message (Sends once at 9:15 AM when market opens)
+                # 0. Daily Market Morning Update (Concise: Capital + Holdings only)
                 if _load_morning_greeted() != today_str:
                     import paper_trading
                     acc_now = paper_trading.get_paper_account()
                     intra_now = acc_now.get("intraday", {}).get("current_balance", 4663.39)
                     swing_now = acc_now.get("swing", {}).get("current_balance", 816.85)
+                    swing_pos = acc_now.get("swing", {}).get("active_positions", [])
+                    holding_str = ", ".join([f"{p['symbol']} ({p['qty']} sh @ ₹{p['entry_price']:.0f})" for p in swing_pos]) if swing_pos else "None"
+                    
                     greeting_msg = (
                         "🌅 <b>Good Morning Sandeep!</b>\n\n"
-                        "🤖 <b>I am LIVE & monitoring the market.</b>\n"
-                        "📈 Strategy: 15m ORB + Volume Shocker\n"
-                        f"🛡️ <b>Live Capital:</b> ₹{intra_now:,.2f} Intraday | ₹{swing_now:,.2f} Swing Cash\n"
-                        "🔍 Universe: Actively scanning 120+ top liquid NSE stocks & Nifty regime\n"
-                        "🌱 Groww Broker: Connected (UCC: ******5723)\n\n"
-                        "✨ <i>Hoping for a great and disciplined trading day!</i>"
+                        f"💰 <b>Intraday Capital:</b> ₹{intra_now:,.2f}\n"
+                        f"💼 <b>Swing Cash:</b> ₹{swing_now:,.2f}\n"
+                        f"📦 <b>Holdings:</b> {holding_str}"
                     )
                     if _send_telegram_message(greeting_msg):
                         _save_morning_greeted(today_str)
