@@ -273,9 +273,11 @@ def _send_telegram_alert(entries: list):
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
     
-    # Execute live paper trade with Rs. 5,000 virtual capital first
+    # Execute live paper trade with actual remaining virtual capital
+    live_intra_bal = 5000.0
     try:
         import paper_trading
+        live_intra_bal = paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 5000.0)
         paper_trading.record_paper_entry(
             symbol=symbol, price=float(price), qty=int(qty),
             sl=float(sl), t1=float(t1), t2=float(t2),
@@ -294,7 +296,7 @@ def _send_telegram_alert(entries: list):
     text += f"🎯 <b>Stock:</b> <b>{symbol}</b> (MIS Intraday)\n"
     text += f"💰 <b>Entry Price:</b> ₹{price:.2f}\n"
     text += f"📦 <b>Quantity:</b> <b>{qty} shares</b> (5x MIS Margin)\n"
-    text += f"💼 <b>Order Value:</b> ₹{order_val:,.2f} | <b>Capital:</b> ₹5,000.00\n\n"
+    text += f"💼 <b>Order Value:</b> ₹{order_val:,.2f} | <b>Available Capital:</b> ₹{live_intra_bal:,.2f}\n\n"
     text += f"🛑 <b>Stop-Loss:</b> ₹{sl:.2f} (Max Risk: ₹{risk_amt:.0f})\n"
     text += f"🎯 <b>Target 1:</b> ₹{t1:.2f} (+₹{t1_profit:.0f})\n"
     text += f"🎯 <b>Target 2:</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
@@ -402,12 +404,12 @@ def check_active_positions(price_map: dict):
             pres = {}
             try:
                 import paper_trading
-                pres = paper_trading.record_paper_exit(symbol, current_price, "3:20 PM Square-off")
+                pres = paper_trading.record_paper_exit(symbol, current_price, "3:20 PM Square-off", fallback_entry_price=entry_p, fallback_qty=rem_qty)
             except Exception:
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", 5000.0)
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
             
             msg = (
                 f"🔴 <b>LIVE INTRADAY TRADE EXITED — 3:20 PM CLOSE</b>\n"
@@ -456,12 +458,12 @@ def check_active_positions(price_map: dict):
             pres = {}
             try:
                 import paper_trading
-                pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_2_HIT")
+                pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_2_HIT", fallback_entry_price=entry_p, fallback_qty=rem_qty)
             except Exception:
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", 5000.0)
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
             
             msg = (
                 f"🏆 <b>LIVE INTRADAY TRADE EXITED — TARGET 2 HIT ✅</b>\n"
@@ -511,11 +513,11 @@ def check_active_positions(price_map: dict):
                 pres = {}
                 try:
                     import paper_trading
-                    pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_HIT")
+                    pres = paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_HIT", fallback_entry_price=entry_p, fallback_qty=1)
                 except Exception:
                     pass
                 net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-                new_bal = pres.get("new_balance", 5000.0)
+                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
                 
                 msg = (
                     f"🎯 <b>LIVE INTRADAY TRADE EXITED — TARGET 1 HIT ✅</b>\n"
@@ -562,7 +564,7 @@ def check_active_positions(price_map: dict):
                 
                 try:
                     import paper_trading
-                    paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_PARTIAL", exit_qty=booked_qty)
+                    paper_trading.record_paper_exit(symbol, current_price, "TARGET_1_PARTIAL", exit_qty=booked_qty, fallback_entry_price=entry_p, fallback_qty=total_qty)
                 except Exception:
                     pass
                     
@@ -596,12 +598,12 @@ def check_active_positions(price_map: dict):
             pres = {}
             try:
                 import paper_trading
-                pres = paper_trading.record_paper_exit(symbol, current_price, "TRAILED_SL" if t1_already_hit else "STOP_LOSS")
+                pres = paper_trading.record_paper_exit(symbol, current_price, "TRAILED_SL" if t1_already_hit else "STOP_LOSS", fallback_entry_price=entry_p, fallback_qty=rem_qty)
             except Exception:
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", 5000.0)
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
             sl_header = "TRAILED SL HIT (PROFIT/COST LOCKED) 🛡️" if t1_already_hit else "STOP-LOSS HIT 🛑"
             sl_reason = "Trailed Stop hit at breakeven/profit" if t1_already_hit else "Strict risk cutoff executed to protect capital"
             
@@ -745,11 +747,15 @@ async def background_market_scanner():
             if is_market_open():
                 # 0. Daily Market Heartbeat Message (Sends once at 9:15 AM when market opens)
                 if _load_morning_greeted() != today_str:
+                    import paper_trading
+                    acc_now = paper_trading.get_paper_account()
+                    intra_now = acc_now.get("intraday", {}).get("current_balance", 4663.39)
+                    swing_now = acc_now.get("swing", {}).get("current_balance", 816.85)
                     greeting_msg = (
                         "🌅 <b>Good Morning Sandeep!</b>\n\n"
                         "🤖 <b>I am LIVE & monitoring the market.</b>\n"
                         "📈 Strategy: 15m ORB + Volume Shocker\n"
-                        "🛡️ Capital: ₹5,000 Intraday + ₹5,000 Swing\n"
+                        f"🛡️ <b>Live Capital:</b> ₹{intra_now:,.2f} Intraday | ₹{swing_now:,.2f} Swing Cash\n"
                         "🔍 Universe: Actively scanning 120+ top liquid NSE stocks & Nifty regime\n"
                         "🌱 Groww Broker: Connected (UCC: ******5723)\n\n"
                         "✨ <i>Hoping for a great and disciplined trading day!</i>"
@@ -774,7 +780,7 @@ async def background_market_scanner():
                     try:
                         import paper_trading
                         swing_acc = paper_trading.get_paper_account().get("swing", {})
-                        swing_avail_cash = swing_acc.get("current_balance", 5000.0)
+                        swing_avail_cash = swing_acc.get("current_balance", 816.85)
                         active_swings = [p["symbol"] for p in swing_acc.get("active_positions", [])]
                         
                         swing_candidates = scan_swing_candidates(min(swing_avail_cash, 5000.0))
@@ -797,6 +803,7 @@ async def background_market_scanner():
                                     setup=top_c['setup']
                                 )
                                 now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                                rem_swing_cash = max(0.0, swing_avail_cash - (top_c['price'] * top_c['qty']))
                                 s_msg = (
                                     f"🟢 <b>LIVE SWING TRADE EXECUTED</b>\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -804,7 +811,7 @@ async def background_market_scanner():
                                     f"🎯 <b>Stock:</b> <b>{top_c['symbol']}</b> (CNC Delivery)\n"
                                     f"💰 <b>Entry Price:</b> ₹{top_c['price']:.2f}\n"
                                     f"📦 <b>Quantity:</b> <b>{top_c['qty']} shares</b> (Holding 2-10 Days)\n"
-                                    f"💼 <b>Order Value:</b> ₹{top_c['price'] * top_c['qty']:,.2f} | <b>Swing Book:</b> ₹5,000.00\n\n"
+                                    f"💼 <b>Order Value:</b> ₹{top_c['price'] * top_c['qty']:,.2f} | <b>Swing Cash Left:</b> ₹{rem_swing_cash:,.2f}\n\n"
                                     f"🛑 <b>Stop-Loss:</b> ₹{top_c['sl']:.2f} (-3.5%)\n"
                                     f"🎯 <b>Target 1:</b> ₹{top_c['t1']:.2f} (+5.5%)\n"
                                     f"🎯 <b>Target 2:</b> ₹{top_c['t2']:.2f} (+9.0%)\n"
@@ -825,9 +832,11 @@ async def background_market_scanner():
                     except Exception as swe:
                         print(f"Error in swing scan: {swe}")
 
-                # 3. Live scan across watchlist
+                # 3. Live scan across watchlist using ACTUAL remaining intraday capital
                 async with _scan_lock:
-                    result = scan_watchlist(DEFAULT_WATCHLIST, TOTAL_CAPITAL)
+                    import paper_trading
+                    live_intra_cap = paper_trading.get_paper_account().get("intraday", {}).get("current_balance", TOTAL_CAPITAL)
+                    result = scan_watchlist(DEFAULT_WATCHLIST, max(0.0, live_intra_cap))
                     stocks = result.get('stocks', [])
                     price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
                     

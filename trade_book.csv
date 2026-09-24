@@ -1,0 +1,4 @@
+trade_id,date,book,symbol,setup,entry_time,entry_price,raw_entry_price,slippage_pct,qty,trade_value,sl,t1,t2,exit_time,exit_price,raw_exit_price,exit_reason,gross_pnl,brokerage_and_taxes,net_pnl,return_pct,is_win
+IDFCFIRSTB_20260923114112,2026-09-23,INTRADAY,IDFCFIRSTB,15m ORB Breakout,11:41:12 AM IST (23-Sep-2026),88.81,88.68,0.3,128,11367.68,87.64,90.91,92.32,03:20:00 PM IST (23-Sep-2026),87.77,87.90,3:20 PM Square-off,-133.12,45.0,-178.12,-3.56,False
+JINDALSTEL_20260923115238,2026-09-23,INTRADAY,JINDALSTEL,15m ORB Breakout,11:52:38 AM IST (23-Sep-2026),1182.27,1180.50,0.3,13,15369.51,1169.13,1200.97,1214.61,03:20:00 PM IST (23-Sep-2026),1173.54,1175.30,3:20 PM Square-off,-113.49,45.0,-158.49,-3.17,False
+IDFCFIRSTB_SWING_20260923151703,2026-09-23,SWING,IDFCFIRSTB,20-Day High Breakout + Volume Surge,03:17:03 PM IST (23-Sep-2026),87.89,87.89,0.0,9,791.01,84.81,93.16,96.68,09:18:05 AM IST (24-Sep-2026),84.54,84.54,STOP_LOSS_HIT,-30.15,20.0,-50.15,-6.34,False

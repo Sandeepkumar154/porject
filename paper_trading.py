@@ -192,14 +192,34 @@ def record_paper_entry(symbol: str, price: float, qty: int, sl: float, t1: float
     save_paper_account(account)
     return trade
 
-def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty: Optional[int] = None) -> Dict[str, Any]:
+def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty: Optional[int] = None, fallback_entry_price: Optional[float] = None, fallback_qty: Optional[int] = None) -> Dict[str, Any]:
     """Close out Intraday trade with 0.15% adverse exit slippage, deduct Groww fees (Rs. 45), update balance."""
     account = get_paper_account()
     intra = account.get("intraday", {})
     trade = intra.get("active_trade")
     
     if not trade or trade.get("symbol") != symbol:
-        return {"success": False, "message": "No matching active intraday paper trade found."}
+        if fallback_entry_price and fallback_qty:
+            trade = {
+                "symbol": symbol,
+                "book": "INTRADAY",
+                "setup": "15m ORB Breakout",
+                "executed_time": get_ist_now_str(),
+                "entry_iso": get_ist_iso_str(),
+                "entry_price": round(float(fallback_entry_price), 2),
+                "raw_entry_price": round(float(fallback_entry_price), 2),
+                "slippage_pct": 0.3,
+                "qty": int(fallback_qty),
+                "trade_value": round(float(fallback_entry_price) * int(fallback_qty), 2),
+                "sl": 0.0,
+                "t1": 0.0,
+                "t2": 0.0,
+                "status": "OPEN",
+                "remaining_qty": int(fallback_qty),
+                "booked_gross": 0.0
+            }
+        else:
+            return {"success": False, "message": "No matching active intraday paper trade found."}
         
     now_str = get_ist_now_str()
     iso_str = get_ist_iso_str()
