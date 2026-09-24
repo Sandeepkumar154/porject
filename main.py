@@ -243,9 +243,27 @@ def _send_telegram_alert(entries: list):
     if not valid_candidates:
         return
         
-    # 7. INSTITUTIONAL VOLUME PRIORITIZATION: Pick the single stock with highest Relative Volume (RVOL)
+    # 7. INSTITUTIONAL VOLUME PRIORITIZATION + LIVE NEWS SENTIMENT GATE
     valid_candidates.sort(key=lambda x: (x.get('rvol', 0.0), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
-    best_entry = valid_candidates[0]
+    
+    from sentiment import fetch_news_sentiment
+    best_entry = None
+    news_info = {'sentiment_label': 'NEUTRAL', 'sentiment_score': 0.0, 'key_headline': ''}
+    for cand in valid_candidates:
+        c_sym = cand.get('symbol', 'UNKNOWN')
+        try:
+            n_res = fetch_news_sentiment(c_sym)
+            if n_res.get('sentiment_label') == 'BEARISH':
+                print(f"[Sentiment Shield] Blocked {c_sym} due to BEARISH news ({n_res.get('sentiment_score')})")
+                continue
+            news_info = n_res
+        except Exception:
+            pass
+        best_entry = cand
+        break
+        
+    if best_entry is None:
+        return
     
     symbol = best_entry.get('symbol', 'UNKNOWN')
     price = best_entry.get('price', 0)
@@ -269,6 +287,9 @@ def _send_telegram_alert(entries: list):
     
     nifty_info = check_nifty_regime()
     nifty_desc = nifty_info.get('description', 'Bullish Above VWAP')
+    news_lbl = news_info.get('sentiment_label', 'NEUTRAL')
+    news_scr = news_info.get('sentiment_score', 0.0)
+    vix_val_num = vix_data.get('vix_value', 15.0) if isinstance(vix_data, dict) else 15.0
         
     alert_key = f"{symbol}_{today_str}"
     alerted_entries_today.add(alert_key)
@@ -302,7 +323,8 @@ def _send_telegram_alert(entries: list):
     text += f"🎯 <b>Target 2:</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
     text += f"💵 <b>Net Target Profit:</b> <b>+₹{net_t2_profit:.0f}</b> (After ₹45 Groww fees)\n\n"
     text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
-    text += f"🌍 <b>Market Tide:</b> {nifty_desc}\n"
+    text += f"🌍 <b>Market Tide:</b> {nifty_desc} | <b>VIX:</b> {vix_val_num}\n"
+    text += f"📰 <b>News Sentiment:</b> {news_lbl} ({news_scr:+.2f})\n"
     text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n"
     text += f"🛡️ <b>Grade:</b> {grade} ({score:.0f}/16)\n"
     text += f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -334,15 +356,14 @@ def _send_telegram_alert(entries: list):
     # Log the trade for self-tuner (silent)
     try:
         log_trade({
-
             'symbol': symbol,
             'entry_time': now.strftime('%Y-%m-%d %H:%M:%S'),
             'entry_price': float(price),
             'sl': float(sl), 't1': float(t1), 't2': float(t2),
             'qty': int(qty), 'score': float(score), 'grade': grade,
             'window': get_current_window().get('name', 'UNKNOWN'),
-            'sentiment_score': 0,
-            'news_label': 'N/A', 'vix_value': 0,
+            'sentiment_score': float(news_scr),
+            'news_label': str(news_lbl), 'vix_value': float(vix_val_num),
             'params_version': 1
         })
     except Exception:
