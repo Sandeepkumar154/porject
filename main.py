@@ -201,8 +201,11 @@ def _send_telegram_alert(entries: list):
     now = datetime.now(IST)
     today_str = now.strftime('%Y-%m-%d')
     
-    # 1. STRICT DEAD ZONE BLOCK: Never trade between 12:00 and 14:00 IST
-    if 12 <= now.hour < 14:
+    # 1. STRICT INTRADAY PRIME WINDOW: ONLY 09:20 AM to 10:30 AM IST
+    # Institutional volume and genuine ORB breakouts happen in the first 70 minutes.
+    # Entries after 10:30 AM get trapped in midday chop and decay into 3:20 PM forced exits.
+    is_prime_window = (now.hour == 9 and now.minute >= 20) or (now.hour == 10 and now.minute <= 30)
+    if not is_prime_window:
         return
         
     # 2. Capital Protection: If already holding an active trade, DO NOT ENTER ANOTHER!
@@ -339,6 +342,7 @@ def _send_telegram_alert(entries: list):
         'entry_price': round(float(price), 2),
         'sl': round(float(sl), 2),
         'initial_sl': round(float(sl), 2),
+        'sl_risk': round(float(price - sl), 2),
         't1': round(float(t1), 2),
         't2': round(float(t2), 2),
         'qty': int(qty),
@@ -347,6 +351,7 @@ def _send_telegram_alert(entries: list):
         'entry_time': now.strftime('%H:%M:%S'),
         'entry_date': today_str,
         't1_hit': False,
+        'be_locked': False,
         'grade': grade,
         'score': float(score)
     }
@@ -414,6 +419,104 @@ def check_active_positions(price_map: dict):
         t2_target = pos['t2']
         sl_level = pos['sl']
         t1_already_hit = pos.get('t1_hit', False)
+        
+        # 0a. Breakeven Stop Lock at +1.0R (Risk-Free Mode)
+        # If price reaches halfway to T1 (+1.0R), move SL to entry_p + 0.1% (fees covered)
+        sl_risk_unit = pos.get('sl_risk', max(0.5, entry_p - sl_level))
+        if not pos.get('be_locked', False) and not t1_already_hit:
+            if current_price >= entry_p + sl_risk_unit:
+                pos['be_locked'] = True
+                new_sl = round(entry_p * 1.001, 2)
+                pos['sl'] = new_sl
+                sl_level = new_sl
+                _save_active_positions(active_positions)
+                now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                be_msg = (
+                    f"🛡️ <b>RISK-FREE BREAKEVEN ACTIVATED (+1.0R)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"💵 <b>Current Price:</b> ₹{current_price:.2f} (Entry: ₹{entry_p:.2f})\n"
+                    f"🛡️ <b>Stop-Loss Trailed to Cost:</b> ₹{new_sl:.2f}\n"
+                    f"✨ <i>Trade is now 100% Risk-Free! Cannot lose capital.</i>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                _send_telegram_message(be_msg)
+
+        # 0b. Stagnation / Midday Exit (Cut dead weight after 75 mins or at 12:00 PM)
+        # If trade has not achieved 50% of T1 and is hovering near cost, cut it early!
+        if not t1_already_hit and not is_square_off_time:
+            entry_dt = None
+            try:
+                entry_dt = datetime.strptime(f"{pos.get('entry_date')} {pos.get('entry_time')}", '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                try:
+                    entry_dt = datetime.strptime(f"{pos.get('entry_date')} {pos.get('entry_time')}", '%Y-%m-%d %H:%M')
+                except Exception:
+                    pass
+            mins_held = 0.0
+            if entry_dt:
+                entry_dt = pytz.timezone('Asia/Kolkata').localize(entry_dt) if entry_dt.tzinfo is None else entry_dt
+                mins_held = (now - entry_dt).total_seconds() / 60.0
+
+            t1_dist = t1_target - entry_p
+            t1_progress = (current_price - entry_p) / t1_dist if t1_dist > 0 else 0.0
+
+            # Cut if held for >= 75 mins OR if clock reaches 12:00 PM without reaching 50% of T1
+            if (mins_held >= 75.0 or now.hour >= 12) and t1_progress < 0.5:
+                now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                exit_pnl = rem_qty * (current_price - entry_p)
+                total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
+                pnl_sign = "+" if total_pnl >= 0 else ""
+
+                pres = {}
+                try:
+                    import paper_trading
+                    pres = paper_trading.record_paper_exit(symbol, current_price, "MOMENTUM_STAGNATION_EXIT", fallback_entry_price=entry_p, fallback_qty=rem_qty)
+                except Exception:
+                    pass
+
+                net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+
+                msg = (
+                    f"⏱️ <b>LIVE INTRADAY TRADE EXITED — STAGNATION CUT</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"🏁 <b>Reason:</b> Momentum stalled for {int(mins_held)}m (Pre-Midday Lull Cut)\n"
+                    f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                    f"📦 <b>Closed:</b> {rem_qty} shares\n"
+                    f"💰 <b>Gross Trade P&L:</b> {pnl_sign}₹{total_pnl:.2f}\n"
+                    f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                    f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b>\n"
+                    f"💼 <b>Preserved Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛡️ <i>Discipline applied: Exited early to prevent afternoon chop and 3:20 PM decay.</i>"
+                )
+                _send_telegram_message(msg)
+
+                try:
+                    log_trade({
+                        'symbol': symbol,
+                        'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                        'entry_price': entry_p,
+                        'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                        'exit_price': current_price,
+                        'qty': pos['qty'],
+                        'exit_reason': 'MOMENTUM_STAGNATION_EXIT',
+                        'net_pnl': round(total_pnl, 2),
+                        'score': pos.get('score', 0),
+                        'grade': pos.get('grade', ''),
+                        'window': 'PRIME_ORB',
+                        'is_winner': total_pnl > 0,
+                        'params_version': 1
+                    })
+                except Exception:
+                    pass
+
+                symbols_to_close.append(symbol)
+                continue
         
         # 1. 3:20 PM Square-off before market close
         if is_square_off_time:
@@ -922,7 +1025,7 @@ async def background_market_scanner():
                     can_enter = (
                         window.get('active', False) and
                         window.get('name') != 'DEAD_ZONE' and
-                        (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+                        ((now.hour == 9 and now.minute >= 20) or (now.hour == 10 and now.minute <= 30)) and
                         len(active_positions) < MAX_ACTIVE_POSITIONS and
                         len(alerted_entries_today) < MAX_DAILY_TRADES
                     )
@@ -1672,7 +1775,7 @@ async def run_live_scan(symbols: Optional[str] = None):
             can_enter = (
                 window.get('active', False) and
                 window.get('name') != 'DEAD_ZONE' and
-                (now.hour < 14 or (now.hour == 14 and now.minute < 45)) and
+                ((now.hour == 9 and now.minute >= 20) or (now.hour == 10 and now.minute <= 30)) and
                 len(active_positions) < MAX_ACTIVE_POSITIONS and
                 len(alerted_entries_today) < MAX_DAILY_TRADES
             )

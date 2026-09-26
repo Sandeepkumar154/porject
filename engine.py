@@ -64,10 +64,8 @@ GRADE_STRONG_MIN = _TUNED['GRADE_STRONG_MIN']  # Auto-tunable within 12-16
 GRADE_AVERAGE_MIN = 10  # Informational only, no trade
 
 WINDOWS = {
-    'PRIME':        {'start': '09:20', 'end': '09:45', 'max_trades': 1},
-    'MOMENTUM':     {'start': '10:00', 'end': '12:00', 'max_trades': 2},
-    'DEAD_ZONE':    {'start': '12:00', 'end': '14:00', 'max_trades': 0},
-    'CONTINUATION': {'start': '14:00', 'end': '15:00', 'max_trades': 2},
+    'PRIME_ORB':    {'start': '09:20', 'end': '10:30', 'max_trades': 2},
+    'DEAD_ZONE':    {'start': '10:30', 'end': '15:30', 'max_trades': 0},
 }
 
 NSE_HOLIDAYS_2026 = {
@@ -543,8 +541,12 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         first_candle = today_candles.iloc[0]
         orb_high = float(first_candle['High'].item() if hasattr(first_candle['High'], 'item') else first_candle['High'])
         orb_low = float(first_candle['Low'].item() if hasattr(first_candle['Low'], 'item') else first_candle['Low'])
-        if c_price > orb_high:
-            orb_breakout = True
+        # Fresh breakout check: strictly within the opening momentum window (candles 2 to 5, i.e. 09:30 to 10:30 AM)
+        if 2 <= len(today_candles) <= 5 and c_price > orb_high:
+            prev_candle_close = float(today_candles['Close'].iloc[-2].item() if hasattr(today_candles['Close'].iloc[-2], 'item') else today_candles['Close'].iloc[-2])
+            # Only fresh breakouts where previous candle was below or at breakout level
+            if prev_candle_close <= orb_high * 1.003:
+                orb_breakout = True
 
     # Stop-loss and Target calculation
     sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
@@ -606,8 +608,9 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
         grade = "WATCH (<15m High)"
         
-    # Gate 3: Anti-Brokerage Sizing (Projected T2 Profit must be >= ₹250)
-    if is_entry and t2_profit < 250.0:
+    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹250 AND T2 Profit >= ₹350)
+    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 18% of target gain.
+    if is_entry and (t1_profit < 250.0 or t2_profit < 350.0):
         is_entry = False
         grade = "SKIP (Low Profit vs Fees)"
 
@@ -620,6 +623,17 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     if is_entry and trades_today >= MAX_TRADES_PER_DAY:
         is_entry = False
         grade = f"SKIP (Max {MAX_TRADES_PER_DAY} trades/day)"
+
+    # Gate 6: Strict Prime Trading Window (09:20 - 10:30 AM IST)
+    # Institutional volume and genuine ORB breakouts happen in the first 70 minutes.
+    # Entries after 10:30 AM get trapped in midday chop and decay into 3:20 PM forced exits.
+    if not for_backtest:
+        ist = pytz.timezone('Asia/Kolkata')
+        now_t = datetime.now(ist)
+        is_prime_time = (now_t.hour == 9 and now_t.minute >= 20) or (now_t.hour == 10 and now_t.minute <= 30)
+        if is_entry and not is_prime_time:
+            is_entry = False
+            grade = "WAIT (Post-10:30 Midday Lull)"
 
     return {
         'symbol': symbol,
