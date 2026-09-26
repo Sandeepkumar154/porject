@@ -528,11 +528,15 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     total_score = base_score + bonus_score
     passed_shields_count = sum(1 for s in shield_res['shields'].values() if s['passed'])
 
-    # 15-Minute Opening Range (ORB) calculation
+    # ============================================================
+    # TOP 1% INSTITUTIONAL TRADER STRATEGY ENGINE
+    # "Relative Strength Pullback & Retest" (RS-VPR)
+    # ============================================================
     df['date'] = df.index.date
     today_date = df['date'].iloc[-1]
     today_candles = df[df['date'] == today_date]
     
+    # 1. 15-Minute Opening Range (ORB) calculation
     orb_high = 0.0
     orb_low = 0.0
     orb_breakout = False
@@ -541,28 +545,48 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         first_candle = today_candles.iloc[0]
         orb_high = float(first_candle['High'].item() if hasattr(first_candle['High'], 'item') else first_candle['High'])
         orb_low = float(first_candle['Low'].item() if hasattr(first_candle['Low'], 'item') else first_candle['Low'])
-        # Fresh breakout check: strictly within the opening momentum window (candles 2 to 5, i.e. 09:30 to 10:30 AM)
+        # Fresh breakout check: strictly within opening window (candles 2 to 5, 09:30 to 10:30 AM)
         if 2 <= len(today_candles) <= 5 and c_price > orb_high:
             prev_candle_close = float(today_candles['Close'].iloc[-2].item() if hasattr(today_candles['Close'].iloc[-2], 'item') else today_candles['Close'].iloc[-2])
-            # Only fresh breakouts where previous candle was below or at breakout level
             if prev_candle_close <= orb_high * 1.003:
                 orb_breakout = True
 
-    # Stop-loss and Target calculation
-    sl = c_price - (ATR_SL_MULTIPLIER * c_atr)
-    if sl <= 0:
-        sl = c_price * 0.95
-        sl_risk = c_price - sl
+    # 2. Top 1% Institutional Pullback / Retest Setup Detection
+    setup_name = "15m Fresh ORB Breakout"
+    is_orb_setup = orb_breakout and (2 <= len(today_candles) <= 5)
+    is_pullback_setup = False
+    
+    if len(today_candles) >= 3 and c_price > c_vwap and c_ema21 > c_ema50:
+        c_open_bar = float(today_candles['Open'].iloc[-1].item() if hasattr(today_candles['Open'].iloc[-1], 'item') else today_candles['Open'].iloc[-1])
+        c_low_bar = float(today_candles['Low'].iloc[-1].item() if hasattr(today_candles['Low'], 'item') else today_candles['Low'])
+        prev_low_bar = float(today_candles['Low'].iloc[-2].item() if hasattr(today_candles['Low'], 'item') else today_candles['Low'])
+        
+        tested_support = (
+            c_low_bar <= c_ema21 * 1.0025 or prev_low_bar <= c_ema21 * 1.0025 or
+            c_low_bar <= c_vwap * 1.003 or prev_low_bar <= c_vwap * 1.003 or
+            (orb_high > 0 and abs(c_low_bar - orb_high) / orb_high <= 0.003)
+        )
+        bullish_bounce = c_price > c_open_bar and c_price > c_ema9
+        if tested_support and bullish_bounce and len(today_candles) <= 6:
+            is_pullback_setup = True
+            setup_name = "20 EMA / VWAP Pullback Bounce"
+
+    # 3. Top 1% Structural Stop-Loss (1.0x ATR tight risk, bounded 0.35% to 0.85%)
+    # Retail uses 2.0x ATR (swing stop) and misses targets. Top 1% use tight structural risk.
+    structural_risk = max(c_price * 0.0035, min(c_price * 0.0085, ATR_SL_MULTIPLIER * c_atr))
+    sl = c_price - structural_risk
     sl_risk = c_price - sl
     if sl_risk <= 0:
-        sl_risk = c_price * 0.008
+        sl_risk = c_price * 0.005
         sl = c_price - sl_risk
-        
-    t1 = c_price + (1.8 * sl_risk)
-    t2 = c_price + (3.0 * sl_risk)
+
+    # Top 1% Asymmetric Targets (2.0R at T1, 3.5R at T2)
+    # 1 win wipes out 2 full losses and still pays brokerage!
+    t1 = c_price + (2.0 * sl_risk)
+    t2 = c_price + (3.5 * sl_risk)
     
-    # MIS 5x Sizing for ₹5,000 capital (Anti-Brokerage Sizing)
-    max_risk = min(150.0, capital * 0.03)
+    # Position sizing: Risk capped at ₹120 (2.4% of ₹5,000 capital)
+    max_risk = min(120.0, capital * 0.025)
     qty_by_risk = int(max_risk / sl_risk) if sl_risk > 0 else 1
     max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
     qty = max(1, min(qty_by_risk, max_mis_qty))
@@ -582,6 +606,15 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     else:
         vol_label = "LOW / RETAIL ONLY"
 
+    # 4. Top 1% Relative Strength (RS) over Nifty 50
+    stock_day_open = float(today_candles['Open'].iloc[0].item() if hasattr(today_candles['Open'].iloc[0], 'item') else today_candles['Open'].iloc[0]) if len(today_candles) > 0 else c_price
+    stock_gain_pct = round(((c_price - stock_day_open) / stock_day_open) * 100, 2) if stock_day_open > 0 else 0.0
+    
+    if nifty_regime is None:
+        nifty_regime = check_nifty_regime()
+    nifty_gain_pct = float(nifty_regime.get('today_gain', 0.0))
+    relative_strength = round(stock_gain_pct - nifty_gain_pct, 2)
+
     # Grading logic — STRICT ELITE RULES
     grade = 'SKIP'
     is_entry = False
@@ -595,22 +628,26 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
 
     # 360-DEGREE TOP TRADER SAFETY GATES
-    if nifty_regime is None:
-        nifty_regime = check_nifty_regime()
-        
     # Gate 1: Market Regime (Do not buy in falling or choppy markets)
     if is_entry and not nifty_regime.get('can_long', False):
         is_entry = False
         grade = f"WAIT ({nifty_regime.get('regime', 'CHOPPY')} Mkt)"
         
-    # Gate 2: 15-Minute ORB Breakout Confirmation
-    if is_entry and not orb_breakout and len(today_candles) >= 2:
+    # Gate 1b: Relative Strength (RS) Outperformance
+    # Top 1% traders ONLY buy stocks clearly outperforming Nifty 50 (RS >= +0.30%)
+    if is_entry and relative_strength < 0.30:
         is_entry = False
-        grade = "WATCH (<15m High)"
+        grade = f"WATCH (Weak RS {relative_strength:+.2f}%)"
+
+    # Gate 2: Institutional Setup (Fresh ORB or 20 EMA/VWAP Pullback)
+    has_top_setup = is_orb_setup or is_pullback_setup
+    if is_entry and not has_top_setup and len(today_candles) >= 2:
+        is_entry = False
+        grade = "WATCH (No Pullback/ORB)"
         
-    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹250 AND T2 Profit >= ₹350)
-    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 18% of target gain.
-    if is_entry and (t1_profit < 250.0 or t2_profit < 350.0):
+    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹220 AND T2 Profit >= ₹350)
+    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 20% of target gain.
+    if is_entry and (t1_profit < 220.0 or t2_profit < 350.0):
         is_entry = False
         grade = "SKIP (Low Profit vs Fees)"
 
@@ -625,8 +662,7 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         grade = f"SKIP (Max {MAX_TRADES_PER_DAY} trades/day)"
 
     # Gate 6: Strict Prime Trading Window (09:20 - 10:30 AM IST)
-    # Institutional volume and genuine ORB breakouts happen in the first 70 minutes.
-    # Entries after 10:30 AM get trapped in midday chop and decay into 3:20 PM forced exits.
+    # Institutional volume and genuine momentum happen in the first 70 minutes.
     if not for_backtest:
         ist = pytz.timezone('Asia/Kolkata')
         now_t = datetime.now(ist)
@@ -643,6 +679,9 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         'grade': grade,
         'all_shields_pass': bool(shield_res['all_passed']),
         'is_entry': bool(is_entry),
+        'setup_name': str(setup_name),
+        'relative_strength': float(relative_strength),
+        'stock_gain_pct': float(stock_gain_pct),
         'price': float(c_price),
         'vwap': float(c_vwap),
         'rsi': float(c_rsi),

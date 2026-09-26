@@ -302,18 +302,21 @@ def _send_telegram_alert(entries: list):
     try:
         import paper_trading
         live_intra_bal = paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 5000.0)
+        setup_type = best_entry.get('setup_name', '15m Fresh ORB Breakout')
         paper_trading.record_paper_entry(
             symbol=symbol, price=float(price), qty=int(qty),
             sl=float(sl), t1=float(t1), t2=float(t2),
-            setup="15m ORB Breakout"
+            setup=setup_type
         )
     except Exception as e:
         print(f"Error logging paper trade: {e}")
 
     now_exec_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
     order_val = float(price) * int(qty)
+    rs_val = best_entry.get('relative_strength', 0.0)
+    setup_lbl = best_entry.get('setup_name', '15m Fresh ORB Breakout')
     
-    # INSTITUTIONAL 360-DEGREE FORMAT WITH LIVE EXECUTION DETAILS & EXACT TIMESTAMP
+    # INSTITUTIONAL TOP 1% TRADER FORMAT WITH LIVE EXECUTION DETAILS & EXACT TIMESTAMP
     text = f"🟢 <b>LIVE INTRADAY TRADE EXECUTED</b>\n"
     text += f"━━━━━━━━━━━━━━━━━━━━━━\n"
     text += f"⏰ <b>Executed At:</b> {now_exec_str}\n"
@@ -321,14 +324,14 @@ def _send_telegram_alert(entries: list):
     text += f"💰 <b>Entry Price:</b> ₹{price:.2f}\n"
     text += f"📦 <b>Quantity:</b> <b>{qty} shares</b> (5x MIS Margin)\n"
     text += f"💼 <b>Order Value:</b> ₹{order_val:,.2f} | <b>Available Capital:</b> ₹{live_intra_bal:,.2f}\n\n"
-    text += f"🛑 <b>Stop-Loss:</b> ₹{sl:.2f} (Max Risk: ₹{risk_amt:.0f})\n"
-    text += f"🎯 <b>Target 1:</b> ₹{t1:.2f} (+₹{t1_profit:.0f})\n"
-    text += f"🎯 <b>Target 2:</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
+    text += f"🛑 <b>Stop-Loss:</b> ₹{sl:.2f} (Tight Structural Risk: ₹{risk_amt:.0f})\n"
+    text += f"🎯 <b>Target 1 (+2.0R):</b> ₹{t1:.2f} (+₹{t1_profit:.0f})\n"
+    text += f"🎯 <b>Target 2 (+3.5R):</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
     text += f"💵 <b>Net Target Profit:</b> <b>+₹{net_t2_profit:.0f}</b> (After ₹45 Groww fees)\n\n"
+    text += f"⚡ <b>Relative Strength (RS):</b> <b>{'+' if rs_val >= 0 else ''}{rs_val:.2f}% vs Nifty</b>\n"
     text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
     text += f"🌍 <b>Market Tide:</b> {nifty_desc} | <b>VIX:</b> {vix_val_num}\n"
-    text += f"📰 <b>News Sentiment:</b> {news_lbl} ({news_scr:+.2f})\n"
-    text += f"💥 <b>Setup:</b> 15m ORB Breakout (> ₹{orb_high:.2f})\n"
+    text += f"💥 <b>Top 1% Setup:</b> {setup_lbl}\n"
     text += f"🛡️ <b>Grade:</b> {grade} ({score:.0f}/16)\n"
     text += f"━━━━━━━━━━━━━━━━━━━━━━\n"
     text += f"⚠️ <i>100% live price execution in virtual ledger. Zero real money at risk.</i>"
