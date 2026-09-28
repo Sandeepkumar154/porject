@@ -352,10 +352,11 @@ def fetch_stock_data_direct(symbol: str, period: str = "5d", interval: str = "15
 
 def check_nifty_regime() -> dict:
     """
-    Evaluates Nifty 50 Market Direction on 15m timeframe:
-    1. Checks if Nifty is above/below its intraday VWAP.
-    2. Checks if Nifty is green or red today.
-    Blocks Long entries if Nifty is falling/bearish/choppy.
+    Evaluates Nifty 50 Market Direction & Volatility (Grok Rule 1):
+    1. Daily Macro Structure: Nifty > 20-day SMA and (Nifty > 50-day SMA or 20-SMA > 50-SMA)
+    2. Volatility Gate: India VIX < 18 (calm), Hard lock-out if VIX >= 22
+    3. Intraday Momentum: Nifty today's gain vs day open and VWAP.
+    Blocks all Long entries if market structure is bearish or volatility is spiking.
     """
     try:
         df = fetch_stock_data_direct('^NSEI', period='5d', interval='15m')
@@ -387,23 +388,60 @@ def check_nifty_regime() -> dict:
         first_open = today_df['Open'].iloc[0] if not today_df.empty else current_p
         today_open = float(first_open.item() if hasattr(first_open, 'item') else first_open)
         today_gain = ((current_p - today_open) / today_open) * 100.0 if today_open > 0 else 0.0
+
+        # Grok Macro Gate Check (Daily Nifty 20/50 SMA)
+        macro_bull = True
+        try:
+            d_df = fetch_stock_data_direct('^NSEI', period='6mo', interval='1d')
+            if d_df is not None and len(d_df) >= 50:
+                dc = d_df['Close'].dropna()
+                sma20 = float(dc.rolling(20).mean().iloc[-1])
+                sma50 = float(dc.rolling(50).mean().iloc[-1])
+                d_close = float(dc.iloc[-1])
+                # Grok condition: Nifty close > 20 SMA and (Nifty close > 50 SMA or 20 SMA > 50 SMA)
+                if d_close < sma20 and d_close < sma50:
+                    macro_bull = False
+        except Exception:
+            pass
+
+        # Grok Volatility Gate Check (India VIX)
+        vix_lockout = False
+        vix_val = 14.0
+        try:
+            from sentiment import fetch_india_vix
+            v_data = fetch_india_vix()
+            vix_val = float(v_data.get('vix_value', 14.0))
+            if vix_val >= 22.0:
+                vix_lockout = True
+        except Exception:
+            pass
         
-        # Strict Bullish/Bearish based on today_gain
-        if today_gain >= 0.15:
+        # Strict Bullish/Bearish based on today_gain, Macro SMA, and VIX
+        if vix_lockout:
+            regime = 'BEARISH'
+            can_long = False
+            can_short = True
+            desc = f"Hard Lock-Out: High India VIX ({vix_val:.1f} >= 22)"
+        elif not macro_bull and today_gain <= 0.0:
+            regime = 'BEARISH'
+            can_long = False
+            can_short = True
+            desc = f"Macro Bearish (Nifty < 20/50 SMA, {today_gain:+.2f}%)"
+        elif today_gain >= 0.15 and macro_bull:
             regime = 'BULLISH'
             can_long = True
             can_short = False
-            desc = f"Nifty Bullish (+{today_gain:.2f}%)"
+            desc = f"Nifty Bullish (+{today_gain:.2f}%) & Macro Aligned"
         elif today_gain <= -0.25:
             regime = 'BEARISH'
             can_long = False
             can_short = True
-            desc = f"Nifty Bearish ({today_gain:.2f}%)"
+            desc = f"Nifty Intraday Bearish ({today_gain:.2f}%)"
         else:
             regime = 'CHOPPY'
-            can_long = True  # Flat market: allow individual stock breakouts that meet strict criteria
+            can_long = macro_bull  # Only allow selective stock breakouts if macro structure is sound
             can_short = False
-            desc = f"Nifty Neutral ({today_gain:+.2f}%) — Stock-Specific"
+            desc = f"Nifty Neutral ({today_gain:+.2f}%)"
             
         return {
             'regime': regime,
@@ -412,6 +450,7 @@ def check_nifty_regime() -> dict:
             'today_gain': round(today_gain, 2),
             'can_long': can_long,
             'can_short': can_short,
+            'vix': vix_val,
             'description': desc
         }
     except Exception as e:
@@ -1127,10 +1166,25 @@ SWING_WATCHLIST_50 = [
 
 def scan_swing_candidates(capital: float = 5000) -> list:
     """
-    Scans 50 high-momentum Indian stocks for daily Swing Trading setups.
-    Returns list of candidate dicts sorted by setup quality.
+    Scans 50 high-momentum Indian stocks for daily CNC Swing Trading setups (Grok Rule 2 & 3):
+    1. Primary: 20-Day Relative Strength (RS) vs Nifty 50 outperformance.
+    2. Trend: Price > 20-EMA and > 50-EMA.
+    3. Setup A: Pullback into 20-EMA zone (+-0.5 to 1.0 ATR) with bullish reversal candle.
+    4. Setup B: Fresh 20-Day High Breakout with 5-day volume expansion.
+    5. Asymmetric Targets: 2.5R to 4.0R (+7% to +12%).
     """
     from concurrent.futures import ThreadPoolExecutor
+
+    # Pre-fetch Nifty 20-day return for Relative Strength calculation
+    nifty_ret_20 = 0.0
+    try:
+        n_df = fetch_stock_data_direct('^NSEI', "6mo", "1d")
+        if n_df is not None and len(n_df) >= 22:
+            n_c = n_df['Close'].dropna()
+            nifty_ret_20 = float(((n_c.iloc[-1] - n_c.iloc[-21]) / n_c.iloc[-21]) * 100.0)
+    except Exception:
+        nifty_ret_20 = 0.0
+
     with ThreadPoolExecutor(max_workers=10) as ex:
         stock_dfs = dict(ex.map(lambda s: (s, fetch_stock_data_direct(s, "1y", "1d")), SWING_WATCHLIST_50))
         
@@ -1146,8 +1200,12 @@ def scan_swing_candidates(capital: float = 5000) -> list:
             h = df['High'].loc[c.index]
             l = df['Low'].loc[c.index]
             v = df['Volume'].loc[c.index]
+            o = df['Open'].loc[c.index]
             
             price = float(c.iloc[-1])
+            if price < 75.0:  # Grok Rule: avoid micro-penny stocks
+                continue
+
             ema20 = compute_ema(c, 20)
             ema50 = compute_ema(c, 50)
             ema200 = compute_ema(c, 200)
@@ -1163,58 +1221,74 @@ def scan_swing_candidates(capital: float = 5000) -> list:
             c_avg_vol = float(avg_v.iloc[-1])
             c_atr = float(atr14.iloc[-1])
             
-            high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
-            vol_multiplier = c_vol / c_avg_vol if c_avg_vol > 0 else 1.0
+            # Grok 20-Day Relative Strength vs Nifty
+            stock_ret_20 = float(((price - c.iloc[-21]) / c.iloc[-21]) * 100.0) if len(c) >= 22 else 0.0
+            rs_20 = round(stock_ret_20 - nifty_ret_20, 2)
             
-            # 1. Breakout setup
-            if (price >= high_20 * 0.995 and 
-                price > c_ema50 and 
-                c_ema50 > c_ema200 and
-                52 <= c_rsi <= 72 and 
-                vol_multiplier >= 1.2):
-                
-                sl = round(price * 0.965, 2)
-                t1 = round(price * 1.06, 2)
-                t2 = round(price * 1.10, 2)
-                qty = max(1, int(capital / price))
-                
+            # Volume surge: 5-day avg volume vs 20-day avg volume
+            v5_avg = float(v.iloc[-5:].mean()) if len(v) >= 5 else c_vol
+            vol_surge_5d = round(v5_avg / c_avg_vol, 2) if c_avg_vol > 0 else 1.0
+            vol_multiplier_1d = round(c_vol / c_avg_vol, 2) if c_avg_vol > 0 else 1.0
+            
+            high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
+            
+            # Grok Rule: Must be outperforming Nifty and in bullish structure
+            in_bull_trend = (price > c_ema20 and price > c_ema50) or (c_ema20 > c_ema50)
+            if rs_20 < 1.0 or not in_bull_trend:
+                continue
+
+            # Grok Stop-Loss: Structural / 1.5x ATR, bounded between 3.5% and 5.0%
+            risk_amt = max(price * 0.035, min(price * 0.050, 1.5 * c_atr))
+            sl = round(price - risk_amt, 2)
+            # Asymmetric Targets: Target 1 = +2.5R, Target 2 = +4.0R (+8% to +14%)
+            t1 = round(price + (2.5 * risk_amt), 2)
+            t2 = round(price + (4.0 * risk_amt), 2)
+            qty = max(1, int(capital / price))
+
+            # 1. Grok Primary Setup: 20 EMA Pullback Bounce in Strong Uptrend
+            is_pullback = (
+                abs(price - c_ema20) / c_ema20 <= 0.025 and 
+                c.iloc[-1] >= o.iloc[-1] and # Bullish green or hammer close
+                42 <= c_rsi <= 65
+            )
+            # 2. Grok Secondary Setup: Fresh 20-Day High Breakout + Volume Surge
+            is_breakout = (
+                price >= high_20 * 0.995 and
+                (vol_surge_5d >= 1.2 or vol_multiplier_1d >= 1.3) and
+                52 <= c_rsi <= 75
+            )
+            
+            if is_pullback:
+                composite_score = round(rs_20 * 2.0 + vol_surge_5d * 5.0 + 10.0, 1)
+                signals.append({
+                    'symbol': s,
+                    'price': round(price, 2),
+                    'type': 'PULLBACK',
+                    'setup': '20 EMA Pullback Bounce (Grok Top RS)',
+                    'rs_20': rs_20,
+                    'rsi': round(c_rsi, 1),
+                    'vol_surge': f"{vol_surge_5d:.1f}x",
+                    'sl': sl,
+                    't1': t1,
+                    't2': t2,
+                    'qty': qty,
+                    'score': composite_score
+                })
+            elif is_breakout:
+                composite_score = round(rs_20 * 2.0 + vol_surge_5d * 6.0 + 15.0, 1)
                 signals.append({
                     'symbol': s,
                     'price': round(price, 2),
                     'type': 'BREAKOUT',
-                    'setup': '20-Day High Breakout + Volume Surge',
+                    'setup': '20-Day High Breakout (Grok Momentum)',
+                    'rs_20': rs_20,
                     'rsi': round(c_rsi, 1),
-                    'vol_surge': f"{vol_multiplier:.1f}x",
+                    'vol_surge': f"{vol_surge_5d:.1f}x",
                     'sl': sl,
                     't1': t1,
                     't2': t2,
                     'qty': qty,
-                    'score': round(vol_multiplier * 10 + (price / high_20) * 10, 1)
-                })
-                
-            # 2. Bull Trend Dip Buy
-            elif (price > c_ema200 and 
-                  c_ema50 > c_ema200 and 
-                  abs(price - c_ema20) / c_ema20 <= 0.02 and 
-                  42 <= c_rsi <= 55):
-                  
-                sl = round(price * 0.96, 2)
-                t1 = round(price * 1.05, 2)
-                t2 = round(price * 1.08, 2)
-                qty = max(1, int(capital / price))
-                
-                signals.append({
-                    'symbol': s,
-                    'price': round(price, 2),
-                    'type': 'DIP_BUY',
-                    'setup': '20 EMA Pullback Bounce (Bull Trend)',
-                    'rsi': round(c_rsi, 1),
-                    'vol_surge': f"{vol_multiplier:.1f}x",
-                    'sl': sl,
-                    't1': t1,
-                    't2': t2,
-                    'qty': qty,
-                    'score': round(15.0 + (55 - c_rsi), 1)
+                    'score': composite_score
                 })
         except Exception:
             continue

@@ -508,6 +508,47 @@ def check_swing_positions(price_map: Dict[str, float]) -> List[Dict[str, Any]]:
                     "trade": res["trade"]
                 })
             continue
+
+        # 4. Grok Rule 5: Stagnation & Time Exits (Free Dead Capital)
+        try:
+            from datetime import datetime
+            entry_dt = datetime.strptime(pos.get("entry_iso", "2026-09-01 00:00:00"), "%Y-%m-%d %H:%M:%S")
+            days_held = (datetime.now() - entry_dt).days
+            
+            # Time stop: CNC max hold 10 trading days (~14 calendar days)
+            if days_held >= 14:
+                res = record_swing_exit(sym, curr_p, "TIME_EXIT (Max 10 Days Hold)")
+                account = get_paper_account()
+                if res.get("success"):
+                    events.append({
+                        "type": "SWING_EXIT",
+                        "symbol": sym,
+                        "reason": f"TIME EXIT ({days_held}d Max Hold)",
+                        "exit_price": curr_p,
+                        "net_pnl": res["net_pnl"],
+                        "new_balance": res["new_balance"],
+                        "exit_time": res["exit_time"],
+                        "trade": res["trade"]
+                    })
+                continue
+            # Stagnation exit: if held >= 4 trading days (~6 calendar days) without making >+1.5% (+0.5R)
+            elif days_held >= 6 and curr_p < pos["entry_price"] * 1.015:
+                res = record_swing_exit(sym, curr_p, "STAGNATION_EXIT (4d Dead Capital)")
+                account = get_paper_account()
+                if res.get("success"):
+                    events.append({
+                        "type": "SWING_EXIT",
+                        "symbol": sym,
+                        "reason": f"STAGNATION CUT ({days_held}d No New High)",
+                        "exit_price": curr_p,
+                        "net_pnl": res["net_pnl"],
+                        "new_balance": res["new_balance"],
+                        "exit_time": res["exit_time"],
+                        "trade": res["trade"]
+                    })
+                continue
+        except Exception:
+            pass
             
     return events
 
