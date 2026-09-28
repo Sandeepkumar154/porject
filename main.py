@@ -1155,28 +1155,28 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <div class="flex items-center space-x-2">
         <div class="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold text-lg">🏆</div>
         <div>
-          <h1 class="text-sm font-bold tracking-tight text-slate-100">MASTER TRADING v2</h1>
-          <p class="text-[10px] text-slate-400 font-mono">6-Layer Intraday System</p>
+          <h1 class="text-sm font-bold tracking-tight text-slate-100">TOP 1% INSTITUTIONAL</h1>
+          <p class="text-[10px] text-emerald-400 font-mono">Relative Strength & 3.5R Targets</p>
         </div>
       </div>
       <div class="flex items-center space-x-2">
         <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold font-mono tracking-wide"
               :class="{
-                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': status.window_active,
-                'bg-amber-500/20 text-amber-400 border border-amber-500/30': status.window_name === 'DEAD_ZONE',
-                'bg-slate-800 text-slate-400 border border-slate-700': !status.window_active && status.window_name !== 'DEAD_ZONE'
+                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': status.nifty_can_long,
+                'bg-rose-500/20 text-rose-400 border border-rose-500/30': status.nifty_regime === 'BEARISH',
+                'bg-amber-500/20 text-amber-400 border border-amber-500/30': !status.nifty_can_long && status.nifty_regime !== 'BEARISH'
               }">
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1"
-                :class="status.window_active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'"></span>
-          <span x-text="status.window_name || 'CLOSED'"></span>
+                :class="status.nifty_can_long ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'"></span>
+          <span x-text="status.nifty_regime ? ('NIFTY: ' + status.nifty_regime) : (status.window_name || 'CLOSED')"></span>
         </span>
       </div>
     </div>
     <div class="grid grid-cols-3 gap-2 mt-3 pt-2.5 border-t border-slate-800/60 text-xs">
       <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-        <div class="text-[10px] text-slate-400">Global Score</div>
-        <div class="font-bold font-mono mt-0.5" :class="globalData.global_score >= 3 ? 'text-emerald-400' : 'text-amber-400'">
-          🌍 <span x-text="globalData.global_score !== undefined ? globalData.global_score + '/5' : '...'"></span>
+        <div class="text-[10px] text-slate-400">Market Gate</div>
+        <div class="font-bold font-mono mt-0.5" :class="status.nifty_can_long ? 'text-emerald-400' : 'text-rose-400'">
+          <span x-text="status.nifty_can_long ? '🟢 LONG OPEN' : '🛑 LONG LOCKED'"></span>
         </div>
       </div>
       <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
@@ -1195,8 +1195,8 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     <div x-show="activeTab === 'scanner'" x-transition class="space-y-4">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-base font-bold text-slate-100">8-Shield Live Scanner</h2>
-          <p class="text-xs text-slate-400">Auto-refresh every 30s</p>
+          <h2 class="text-base font-bold text-slate-100">Top 1% Institutional Scanner</h2>
+          <p class="text-xs text-slate-400">RS &ge; +0.30% vs Nifty | Pullback & ORB</p>
         </div>
         <button @click="fetchScan()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 shadow-sm shadow-emerald-900/30">
           <span :class="{'animate-spin': isScanning}">🔄</span>
@@ -1206,11 +1206,11 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <template x-if="entryStocks.length > 0">
         <div class="p-3.5 bg-emerald-500/10 border border-emerald-500/40 rounded-xl space-y-1">
           <div class="flex items-center text-emerald-400 font-bold text-xs">
-            <span class="text-base mr-1.5">🔥</span> ACTIONABLE ENTRY DETECTED!
+            <span class="text-base mr-1.5">🔥</span> TOP 1% INSTITUTIONAL SETUP DETECTED!
           </div>
           <p class="text-xs text-slate-300">
             <span class="font-semibold text-emerald-300" x-text="entryStocks.map(s => s.symbol).join(', ')"></span>
-            passed all 8 Shields with high score!
+            qualified with strong Relative Strength & high volume!
           </p>
         </div>
       </template>
@@ -1258,42 +1258,42 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
                         'bg-emerald-500 text-slate-950': stock.grade === 'ELITE',
                         'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40': stock.grade === 'STRONG',
                         'bg-amber-500/20 text-amber-400 border border-amber-500/40': stock.grade === 'AVERAGE',
-                        'bg-slate-800 text-slate-400': stock.grade === 'SKIP'
+                        'bg-slate-800 text-slate-400': stock.grade !== 'ELITE' && stock.grade !== 'STRONG' && stock.grade !== 'AVERAGE'
                       }"
                       x-text="stock.grade"></span>
               </div>
               <div class="text-right">
                 <div class="text-sm font-bold font-mono text-slate-100">₹<span x-text="stock.price.toFixed(2)"></span></div>
-                <div class="text-[10px] font-mono" :class="stock.price >= stock.vwap ? 'text-emerald-400' : 'text-rose-400'">
-                  VWAP ₹<span x-text="stock.vwap.toFixed(2)"></span>
+                <div class="text-[10px] font-mono" :class="(stock.relative_strength || 0) >= 0.3 ? 'text-emerald-400' : 'text-slate-400'">
+                  <span x-text="(stock.relative_strength >= 0 ? '+' : '') + (stock.relative_strength || 0).toFixed(2) + '% RS'"></span>
                 </div>
               </div>
             </div>
             <template x-if="stock.is_entry">
               <div class="p-3 bg-emerald-950/30 border-b border-emerald-900/40 grid grid-cols-3 gap-2 text-center text-xs">
                 <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
-                  <div class="text-[10px] text-slate-400">Stop Loss</div>
+                  <div class="text-[10px] text-slate-400">Stop Loss (1.0x ATR)</div>
                   <div class="font-bold font-mono text-rose-400">₹<span x-text="stock.sl"></span></div>
                 </div>
                 <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
-                  <div class="text-[10px] text-slate-400">Target 1 (60%)</div>
+                  <div class="text-[10px] text-slate-400">Target 1 (+2.0R)</div>
                   <div class="font-bold font-mono text-emerald-400">₹<span x-text="stock.t1"></span></div>
                 </div>
                 <div class="bg-slate-950/60 p-2 rounded border border-emerald-900/30">
-                  <div class="text-[10px] text-slate-400">Quantity</div>
-                  <div class="font-bold font-mono text-amber-300"><span x-text="stock.qty"></span> shs</div>
+                  <div class="text-[10px] text-slate-400">Target 2 (+3.5R)</div>
+                  <div class="font-bold font-mono text-emerald-300">₹<span x-text="stock.t2"></span></div>
                 </div>
               </div>
             </template>
             <div class="p-3.5 space-y-2.5 text-xs">
               <div class="flex items-center justify-between text-slate-300">
-                <span>Score: <b class="text-slate-100" x-text="stock.score"></b>/16</span>
+                <span class="text-emerald-400 font-mono font-medium truncate" x-text="stock.setup_name || '15m ORB / Pullback'"></span>
+                <span>RVOL: <b :class="stock.rvol >= 1.5 ? 'text-emerald-400' : 'text-slate-400'" x-text="(stock.rvol || 0).toFixed(1) + 'x'"></b></span>
                 <span>RSI: <b :class="stock.rsi >= 45 && stock.rsi <= 68 ? 'text-emerald-400' : 'text-slate-400'" x-text="stock.rsi.toFixed(1)"></b></span>
-                <span>ADX: <b :class="stock.adx >= 20 ? 'text-emerald-400' : 'text-slate-400'" x-text="stock.adx.toFixed(1)"></b></span>
               </div>
               <details class="group">
                 <summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 flex items-center justify-between py-1 select-none">
-                  <span>View 8 Shields Breakdown</span>
+                  <span>View Technical Shields Breakdown</span>
                   <span class="text-xs transition-transform group-open:rotate-180">▼</span>
                 </summary>
                 <div class="pt-2 space-y-1.5 text-[11px] border-t border-slate-800/80 mt-1">
