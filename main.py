@@ -909,7 +909,7 @@ async def background_market_scanner():
                         swing_avail_cash = swing_acc.get("current_balance", 816.85)
                         active_swings = [p["symbol"] for p in swing_acc.get("active_positions", [])]
                         
-                        swing_candidates = scan_swing_candidates(min(swing_avail_cash, 5000.0))
+                        swing_candidates = await asyncio.to_thread(scan_swing_candidates, min(swing_avail_cash, 5000.0))
                         if swing_candidates:
                             # Auto-execute top qualified swing candidate that we don't already hold
                             top_c = None
@@ -954,7 +954,7 @@ async def background_market_scanner():
                                     msg += f"   Buy: ₹{c['price']:.2f} | SL: ₹{c['sl']:.2f}\n"
                                     msg += f"   T1: ₹{c['t1']:.2f} | T2: ₹{c['t2']:.2f}\n"
                                     msg += f"   Qty: <b>{c['qty']}</b>\n\n"
-                                _send_telegram_message(msg)
+                                    _send_telegram_message(msg)
                     except Exception as swe:
                         print(f"Error in swing scan: {swe}")
 
@@ -962,7 +962,7 @@ async def background_market_scanner():
                 async with _scan_lock:
                     import paper_trading
                     live_intra_cap = paper_trading.get_paper_account().get("intraday", {}).get("current_balance", TOTAL_CAPITAL)
-                    result = scan_watchlist(DEFAULT_WATCHLIST, max(0.0, live_intra_cap))
+                    result = await asyncio.to_thread(scan_watchlist, DEFAULT_WATCHLIST, max(0.0, live_intra_cap))
                     stocks = result.get('stocks', [])
                     price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
                     
@@ -1757,7 +1757,7 @@ async def run_live_scan(symbols: Optional[str] = None):
 
     sym_list = [s.strip().upper() for s in symbols.split(',')] if symbols else DEFAULT_WATCHLIST
     async with _scan_lock:
-        result = scan_watchlist(sym_list, TOTAL_CAPITAL)
+        result = await asyncio.to_thread(scan_watchlist, sym_list, TOTAL_CAPITAL)
         stocks = result.get('stocks', [])
         price_map = {s['symbol']: s['price'] for s in stocks if 'symbol' in s and 'price' in s}
         
