@@ -792,12 +792,10 @@ def _load_morning_greeted() -> str:
 
 def _save_morning_greeted(date_str: str):
     try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(MORNING_GREETED_FILE), suffix='.tmp')
-        with os.fdopen(tmp_fd, 'w') as f:
+        with open(MORNING_GREETED_FILE, 'w') as f:
             json.dump({'date': date_str}, f)
-        os.replace(tmp_path, MORNING_GREETED_FILE)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error saving morning greeted: {e}")
 
 sent_session_updates = set()
 _scan_lock = asyncio.Lock()
@@ -872,11 +870,14 @@ async def background_market_scanner():
 
             if is_market_open():
                 # 0. Daily Market Morning Update (Concise: Capital + Holdings only)
-                if _load_morning_greeted() != today_str:
+                morning_key = f"{today_str}_MORNING"
+                if morning_key not in sent_session_updates and _load_morning_greeted() != today_str:
+                    sent_session_updates.add(morning_key)
+                    _save_morning_greeted(today_str)
                     import paper_trading
                     acc_now = paper_trading.get_paper_account()
                     intra_now = acc_now.get("intraday", {}).get("current_balance", 4663.39)
-                    swing_now = acc_now.get("swing", {}).get("current_balance", 816.85)
+                    swing_now = acc_now.get("swing", {}).get("current_balance", 4946.85)
                     swing_pos = acc_now.get("swing", {}).get("active_positions", [])
                     holding_str = ", ".join([f"{p['symbol']} ({p['qty']} sh @ ₹{p['entry_price']:.0f})" for p in swing_pos]) if swing_pos else "None"
                     
@@ -886,9 +887,7 @@ async def background_market_scanner():
                         f"💼 <b>Swing Cash:</b> ₹{swing_now:,.2f}\n"
                         f"📦 <b>Holdings:</b> {holding_str}"
                     )
-                    if _send_telegram_message(greeting_msg):
-                        _save_morning_greeted(today_str)
-                        sent_session_updates.add(f"{today_str}_MORNING")
+                    _send_telegram_message(greeting_msg)
 
                 # 1. STRICT DEAD ZONE (12:00 - 14:00 IST): Trading strictly paused!
                 if 12 <= now.hour < 14:
@@ -988,6 +987,10 @@ async def background_market_scanner():
                             if swing_price_map:
                                 swing_events = paper_trading.check_swing_positions(swing_price_map)
                                 for ev in swing_events:
+                                    ev_key = f"{today_str}_{ev.get('symbol')}_{ev.get('type')}_{ev.get('reason','')}"
+                                    if ev_key in sent_session_updates:
+                                        continue
+                                    sent_session_updates.add(ev_key)
                                     if ev["type"] == "SWING_EXIT":
                                         s_exit_msg = (
                                             f"🔴 <b>LIVE SWING TRADE EXITED — {ev['reason']}</b>\n"
