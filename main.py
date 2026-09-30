@@ -1545,10 +1545,9 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 </body>
 </html>'''
 
-@app.get('/health')
-@app.head('/health')
+@app.api_route('/health', methods=['GET', 'HEAD', 'POST', 'PUT'])
 async def health_check():
-    """Health check endpoint for Render."""
+    """Health check endpoint for Render and external pingers."""
     return {'status': 'ok'}
 
 @app.get('/', response_class=HTMLResponse)
