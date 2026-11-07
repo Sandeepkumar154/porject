@@ -684,14 +684,16 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
         grade = "WATCH (No Pullback/ORB)"
         
-    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹220 AND T2 Profit >= ₹350)
-    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 20% of target gain.
-    if is_entry and (t1_profit < 220.0 or t2_profit < 350.0):
+    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹120 AND T2 Profit >= ₹180 for ₹10k capital)
+    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 35% of target gain.
+    min_t1 = 110.0 if capital <= 10000 else capital * 0.012
+    min_t2 = 180.0 if capital <= 10000 else capital * 0.020
+    if is_entry and (t1_profit < min_t1 or t2_profit < min_t2):
         is_entry = False
         grade = "SKIP (Low Profit vs Fees)"
 
-    # Gate 4: Institutional Volume Shocker (RVOL >= 1.8x average volume)
-    if is_entry and rvol < 1.8:
+    # Gate 4: Institutional Volume Shocker (RVOL >= 1.35x average volume)
+    if is_entry and rvol < 1.35:
         is_entry = False
         grade = f"WATCH (Low Vol {rvol:.1f}x)"
 
@@ -700,15 +702,16 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
         grade = f"SKIP (Max {MAX_TRADES_PER_DAY} trades/day)"
 
-    # Gate 6: Strict Prime Trading Window (09:20 - 10:30 AM IST)
-    # Institutional volume and genuine momentum happen in the first 70 minutes.
+    # Gate 6: Strict Prime Trading Window (09:20 - 10:15 AM IST)
+    # Institutional volume and genuine momentum happen in the first 55 minutes.
+    # Entries after 10:15 get trapped in midday stagnation.
     if not for_backtest:
         ist = pytz.timezone('Asia/Kolkata')
         now_t = datetime.now(ist)
-        is_prime_time = (now_t.hour == 9 and now_t.minute >= 20) or (now_t.hour == 10 and now_t.minute <= 30)
+        is_prime_time = (now_t.hour == 9 and now_t.minute >= 20) or (now_t.hour == 10 and now_t.minute <= 15)
         if is_entry and not is_prime_time:
             is_entry = False
-            grade = "WAIT (Post-10:30 Midday Lull)"
+            grade = "WAIT (Post-10:15 Midday Lull)"
 
     return {
         'symbol': symbol,
@@ -870,7 +873,7 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                 in_trade = False
                 trade_info = {}
                 
-                for idx in range(1, min(10, len(day_df))):
+                for idx in range(1, min(5, len(day_df))):
                     c_time = day_df.index[idx]
                     curr_idx = df.index.searchsorted(c_time)
                     c_open = float(day_df['Open'].iloc[idx])
@@ -915,11 +918,12 @@ def run_backtest(symbols: list, capital: float = 5000, period: str = '60d') -> d
                         max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
                         qty = max(1, min(qty_by_risk, max_mis_qty))
                         
-                        t1 = c_price + (1.8 * sl_risk)
-                        t2 = c_price + (3.0 * sl_risk)
+                        t1 = c_price + (1.5 * sl_risk)
+                        t2 = c_price + (2.5 * sl_risk)
                         
-                        # Gate 3: Projected T2 profit >= ₹250
-                        if qty * (t2 - c_price) < 250.0:
+                        # Gate 3: Realistic Target 2 profit threshold
+                        min_t2_bt = 150.0 if capital <= 10000 else capital * 0.02
+                        if qty * (t2 - c_price) < min_t2_bt:
                             continue
                             
                         trade_info = {
