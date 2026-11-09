@@ -834,7 +834,13 @@ async def background_market_scanner():
                     acc = paper_trading.get_paper_account()
                     intra_acc = acc.get('intraday', {})
                     swing_acc = acc.get('swing', {})
-                    today_pnl = intra_acc.get('realised_pnl', 0.0)
+                    
+                    # Calculate TODAY's actual trades and PnL (do not confuse with lifetime balance)
+                    today_trades = [t for t in intra_acc.get('trades_history', []) if str(t.get('exit_iso', '')).startswith(today_str)]
+                    today_pnl = sum(t.get('net_pnl', 0.0) for t in today_trades)
+                    today_trades_count = len(today_trades)
+                    all_time_pnl = intra_acc.get('realised_pnl', 0.0)
+                    
                     active_swings = swing_acc.get('active_positions', [])
                     swing_names = ", ".join([p['symbol'] for p in active_swings]) if active_swings else "None"
                     
@@ -842,11 +848,12 @@ async def background_market_scanner():
                         f"🏁 <b>MARKET CLOSED — DAILY SUMMARY ({today_str})</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"💼 <b>Intraday Capital:</b> ₹{intra_acc.get('current_balance', 5000.0):,.2f}\n"
-                        f"📊 <b>Today's Intraday P&L:</b> {'+' if today_pnl >= 0 else ''}₹{today_pnl:.2f}\n"
-                        f"🎯 <b>Total Intraday Trades:</b> {intra_acc.get('total_trades', 0)}\n"
+                        f"📊 <b>Today's Intraday P&L:</b> {'+' if today_pnl > 0 else ''}₹{today_pnl:.2f}\n"
+                        f"🎯 <b>Today's Trades Taken:</b> {today_trades_count}\n"
+                        f"📈 <b>All-Time Realised P&L:</b> {'+' if all_time_pnl > 0 else ''}₹{all_time_pnl:.2f}\n"
                         f"📦 <b>Active Swing Positions ({len(active_swings)}):</b> {swing_names}\n"
                         f"🌱 <b>Groww Broker:</b> Connected (UCC: ******5723)\n"
-                        f"🔍 <b>Market Universe Scanned:</b> 120+ Top Liquid NSE Stocks\n"
+                        f"🔍 <b>Market Universe Scanned:</b> 130+ Top Liquid NSE Stocks\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"✨ <i>Bot is standing by quietly until tomorrow 9:15 AM IST.</i>"
                     )
