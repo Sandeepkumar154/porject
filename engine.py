@@ -261,9 +261,10 @@ def evaluate_shields(price, vwap, rsi, adx, macd_hist, bb_upper, bb_lower, super
     shields = {}
     base_score = 0.0
     
-    # 1. RSI Shield
-    rsi_pass = RSI_RANGE[0] <= rsi <= RSI_RANGE[1]
-    shields['RSI'] = {'passed': rsi_pass, 'reason': f"RSI={rsi:.1f}", 'points': SHIELD_POINTS if rsi_pass else 0}
+    # 1. RSI Shield (allow strong power-trend up to 82 when ADX >= 25 confirms institutional trend)
+    rsi_upper = 82.0 if adx >= 25.0 else RSI_RANGE[1]
+    rsi_pass = RSI_RANGE[0] <= rsi <= rsi_upper
+    shields['RSI'] = {'passed': rsi_pass, 'reason': f"RSI={rsi:.1f} (max {rsi_upper:.0f})", 'points': SHIELD_POINTS if rsi_pass else 0}
     
     # 2. Supertrend Shield
     st_pass = supertrend_dir == 1
@@ -295,8 +296,8 @@ def evaluate_shields(price, vwap, rsi, adx, macd_hist, bb_upper, bb_lower, super
     ema_pass = price > ema9 >= ema21 >= ema50
     shields['EMA Ladder'] = {'passed': ema_pass, 'reason': "Bullish Alignment" if ema_pass else "Misaligned", 'points': SHIELD_POINTS if ema_pass else 0}
     
-    # 8. Entry Volume Shield
-    vol_pass = volume >= 1.5 * avg_volume
+    # 8. Entry Volume Shield (aligned with Gate 4 institutional RVOL >= 1.35x)
+    vol_pass = volume >= 1.35 * avg_volume
     multiplier = volume / avg_volume if avg_volume else 0
     shields['Volume'] = {'passed': vol_pass, 'reason': f"{multiplier:.1f}x Avg", 'points': SHIELD_POINTS if vol_pass else 0}
     
@@ -529,18 +530,19 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     c_ema50 = float(ema50.iloc[latest].item() if hasattr(ema50.iloc[latest], 'item') else ema50.iloc[latest])
     c_vol = float(volume.iloc[latest].item() if hasattr(volume.iloc[latest], 'item') else volume.iloc[latest])
     c_avg_vol = float(avg_volume.iloc[latest].item() if hasattr(avg_volume.iloc[latest], 'item') else avg_volume.iloc[latest])
-    # Fix: Yahoo Finance returns 0.0 volume on the current incomplete 15m candle snapshot.
-    # Check the latest completed candle(s) so institutional surge is accurately measured even right after a new bar opens.
-    if c_vol <= 0 and len(volume) >= 3:
+    # Fix: Live 15m candles accumulate volume from 0 at :00/:15/:30/:45, so at 09:32 AM c_vol is only 15% of a bar.
+    # Evaluate max(current_candle_vol, previous_completed_vol) so genuine opening institutional surges pass cleanly.
+    if len(volume) >= 2:
         v_prev = float(volume.iloc[-2].item() if hasattr(volume.iloc[-2], 'item') else volume.iloc[-2])
-        v_closed = float(volume.iloc[-3].item() if hasattr(volume.iloc[-3], 'item') else volume.iloc[-3])
-        c_vol = max(v_prev, v_closed)
-        if len(avg_volume) >= 3:
-            c_avg_vol = float(avg_volume.iloc[-3].item() if hasattr(avg_volume.iloc[-3], 'item') else avg_volume.iloc[-3])
-    elif c_vol <= 0 and len(volume) >= 2:
-        c_vol = float(volume.iloc[-2].item() if hasattr(volume.iloc[-2], 'item') else volume.iloc[-2])
-        if len(avg_volume) >= 2:
-            c_avg_vol = float(avg_volume.iloc[-2].item() if hasattr(avg_volume.iloc[-2], 'item') else avg_volume.iloc[-2])
+        if c_vol <= 0 and len(volume) >= 3:
+            v_closed = float(volume.iloc[-3].item() if hasattr(volume.iloc[-3], 'item') else volume.iloc[-3])
+            c_vol = max(v_prev, v_closed)
+            if len(avg_volume) >= 3:
+                c_avg_vol = float(avg_volume.iloc[-3].item() if hasattr(avg_volume.iloc[-3], 'item') else avg_volume.iloc[-3])
+        else:
+            c_vol = max(c_vol, v_prev)
+            if pd.isna(c_avg_vol) or c_avg_vol <= 0:
+                c_avg_vol = float(avg_volume.iloc[-2].item() if hasattr(avg_volume.iloc[-2], 'item') else avg_volume.iloc[-2])
     c_atr = float(atr.iloc[latest].item() if hasattr(atr.iloc[latest], 'item') else atr.iloc[latest])
 
     shield_res = evaluate_shields(

@@ -819,8 +819,12 @@ async def background_market_scanner():
             
             from datetime import timedelta
             yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d')
-            global sent_session_updates
+            global sent_session_updates, alerted_entries_today
             sent_session_updates = {k for k in sent_session_updates if k.startswith(today_str) or k.startswith(yesterday_str)}
+            prev_alert_count = len(alerted_entries_today)
+            alerted_entries_today = {k for k in alerted_entries_today if k.endswith(f"_{today_str}")}
+            if len(alerted_entries_today) != prev_alert_count:
+                _save_alerted_entries(alerted_entries_today)
 
             # 2b. Friday Weekly Paper Trading Report (15:30 - 15:45 IST)
             friday_paper_key = f"{today_str}_FRIDAY_PAPER_REPORT"
