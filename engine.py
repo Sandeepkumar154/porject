@@ -1246,7 +1246,8 @@ def scan_swing_candidates(capital: float = 5000) -> list:
             o = df['Open'].loc[c.index]
             
             price = float(c.iloc[-1])
-            if price < 75.0:  # Grok Rule: avoid micro-penny stocks
+            # Capital efficiency for ₹5,000 Swing Book: avoid sub-₹100 chop AND avoid >₹1,600 1-share stocks
+            if price < 100.0 or price > 1600.0:
                 continue
 
             ema20 = compute_ema(c, 20)
@@ -1264,7 +1265,7 @@ def scan_swing_candidates(capital: float = 5000) -> list:
             c_avg_vol = float(avg_v.iloc[-1])
             c_atr = float(atr14.iloc[-1])
             
-            # Grok 20-Day Relative Strength vs Nifty
+            # 20-Day Relative Strength vs Nifty
             stock_ret_20 = float(((price - c.iloc[-21]) / c.iloc[-21]) * 100.0) if len(c) >= 22 else 0.0
             rs_20 = round(stock_ret_20 - nifty_ret_20, 2)
             
@@ -1275,30 +1276,32 @@ def scan_swing_candidates(capital: float = 5000) -> list:
             
             high_20 = float(h.iloc[-21:-1].max()) if len(h) >= 21 else price
             
-            # Grok Rule: Must be outperforming Nifty and in bullish structure
-            in_bull_trend = (price > c_ema20 and price > c_ema50) or (c_ema20 > c_ema50)
-            if rs_20 < 1.0 or not in_bull_trend:
+            # Confirmed institutional uptrend (Price > 20-EMA > 50-EMA) and strong relative momentum
+            in_bull_trend = (price > c_ema20) and (c_ema20 > c_ema50)
+            if not in_bull_trend or (rs_20 < 0.0 and stock_ret_20 < 10.0):
                 continue
 
-            # Grok Stop-Loss: Structural / 1.5x ATR, bounded between 3.5% and 5.0%
-            risk_amt = max(price * 0.035, min(price * 0.050, 1.5 * c_atr))
+            # Tight Structural Swing Stop-Loss: 3.5% to 4.5%
+            risk_amt = max(price * 0.035, min(price * 0.045, 1.4 * c_atr))
             sl = round(price - risk_amt, 2)
-            # Asymmetric Targets: Target 1 = +2.5R, Target 2 = +4.0R (+8% to +14%)
-            t1 = round(price + (2.5 * risk_amt), 2)
-            t2 = round(price + (4.0 * risk_amt), 2)
+            # Achievable Targets (+5.5% T1 = +₹250+ net on ₹5k, +9.0% T2 = +₹430+ net)
+            t1 = round(price * 1.055, 2)
+            t2 = round(price * 1.095, 2)
             qty = max(1, int(capital / price))
 
-            # 1. Grok Primary Setup: 20 EMA Pullback Bounce in Strong Uptrend
+            # 1. Primary Setup: 20-EMA Flag / Trend Continuation Bounce
+            dist_ema20 = (price - c_ema20) / c_ema20
+            prev_c = float(c.iloc[-2]) if len(c) >= 2 else price
             is_pullback = (
-                abs(price - c_ema20) / c_ema20 <= 0.025 and 
-                c.iloc[-1] >= o.iloc[-1] and # Bullish green or hammer close
-                42 <= c_rsi <= 65
+                -0.01 <= dist_ema20 <= 0.06 and
+                (c.iloc[-1] >= o.iloc[-1] or price > prev_c) and
+                45 <= c_rsi <= 74
             )
-            # 2. Grok Secondary Setup: Fresh 20-Day High Breakout + Volume Surge
+            # 2. Secondary Setup: Fresh 20-Day High Breakout + Volume Expansion
             is_breakout = (
-                price >= high_20 * 0.995 and
-                (vol_surge_5d >= 1.2 or vol_multiplier_1d >= 1.3) and
-                52 <= c_rsi <= 75
+                price >= high_20 * 0.985 and
+                (vol_surge_5d >= 1.1 or vol_multiplier_1d >= 1.15) and
+                52 <= c_rsi <= 78
             )
             
             if is_pullback:
