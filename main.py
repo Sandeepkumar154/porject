@@ -20,7 +20,7 @@ from engine import (
     scan_watchlist, scan_stock, run_backtest, get_current_window,
     is_market_open, DEFAULT_WATCHLIST, WINDOWS,
     scan_swing_candidates, SWING_WATCHLIST_50,
-    check_nifty_regime
+    check_nifty_regime, fetch_premarket_radar, NSE_HOLIDAYS_2026
 )
 
 from self_tune import log_trade, run_weekly_tune, load_tuned_params, load_trade_log, load_tune_history
@@ -328,8 +328,13 @@ def _send_telegram_alert(entries: list):
     text += f"🎯 <b>Target 1 (+2.0R):</b> ₹{t1:.2f} (+₹{t1_profit:.0f})\n"
     text += f"🎯 <b>Target 2 (+3.5R):</b> ₹{t2:.2f} (+₹{t2_profit:.0f})\n"
     text += f"💵 <b>Net Target Profit:</b> <b>+₹{net_t2_profit:.0f}</b> (After ₹45 Groww fees)\n\n"
+    pdh_val = best_entry.get('pdh', 0.0)
+    pdl_val = best_entry.get('pdl', 0.0)
+    pdh_lbl = best_entry.get('pdh_status', 'N/A')
     text += f"⚡ <b>Relative Strength (RS):</b> <b>{'+' if rs_val >= 0 else ''}{rs_val:.2f}% vs Nifty</b>\n"
     text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
+    if pdh_val > 0:
+        text += f"📏 <b>Yesterday Levels:</b> PDH ₹{pdh_val:.1f} | PDL ₹{pdl_val:.1f} ({pdh_lbl})\n"
     text += f"🌍 <b>Market Tide:</b> {nifty_desc} | <b>VIX:</b> {vix_val_num}\n"
     text += f"💥 <b>Top 1% Setup:</b> {setup_lbl}\n"
     text += f"🛡️ <b>Grade:</b> {grade} ({score:.0f}/16)\n"
@@ -876,6 +881,56 @@ async def background_market_scanner():
                         print(f"[Groww] Auto-refresh notice: {res.get('message')}")
                 except Exception as ge:
                     print(f"[Groww] Auto-refresh error: {ge}")
+
+            # 0b. Daily 09:09 AM Pre-Market Radar (NSE Pre-Open Equilibrium + Yesterday High/Low)
+            premarket_key = f"{today_str}_PREMARKET_RADAR"
+            premarket_lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'premarket_sent.json')
+            if (
+                premarket_key not in sent_session_updates
+                and now.weekday() < 5
+                and now.date() not in NSE_HOLIDAYS_2026
+                and now.hour == 9 and 9 <= now.minute <= 14
+            ):
+                already_sent_disk = False
+                try:
+                    if os.path.exists(premarket_lock_file):
+                        with open(premarket_lock_file, 'r') as f:
+                            if json.load(f).get('date') == today_str:
+                                already_sent_disk = True
+                except Exception:
+                    pass
+
+                if not already_sent_disk:
+                    sent_session_updates.add(premarket_key)
+                    try:
+                        with open(premarket_lock_file, 'w') as f:
+                            json.dump({'date': today_str}, f)
+                    except Exception:
+                        pass
+                    try:
+                        radar = await asyncio.to_thread(fetch_premarket_radar, 5)
+                        cands = radar.get('candidates', [])
+                        adv = radar.get('advances', 0)
+                        dec = radar.get('declines', 0)
+                        breadth = radar.get('breadth', 'NEUTRAL')
+                        msg = (
+                            f"🔮 <b>09:09 AM PRE-MARKET RADAR ({today_str})</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 <b>Pre-Open Breadth:</b> {breadth} ({adv} Adv / {dec} Dec)\n"
+                            f"🎯 <b>Top 5 Institutional Gap & PDH Leaders:</b>\n\n"
+                        )
+                        for idx_c, c in enumerate(cands, 1):
+                            msg += (
+                                f"{idx_c}. <b>{c['symbol']}</b> | IEP: ₹{c['iep']:.2f} (<b>+{c['gap_pct']}%</b>)\n"
+                                f"   📏 PDH: ₹{c['pdh']:.1f} | PDL: ₹{c['pdl']:.1f} | <b>{c['signal_tag']}</b>\n"
+                                f"   💰 Pre-Open Turnover: ₹{c['turnover_cr']:.1f} Cr\n\n"
+                            )
+                        if not cands:
+                            msg += "⚠️ <i>No strong Gap & Go institutional candidates found today.</i>\n"
+                        msg += "━━━━━━━━━━━━━━━━━━━━━━\n✨ <i>Watch these levels carefully at the 9:15 AM bell!</i>"
+                        _send_telegram_message(msg)
+                    except Exception as pe:
+                        print(f"[PreMarket Radar] Error: {pe}")
 
             if is_market_open():
                 # 0. Daily Market Morning Update (Concise: Capital + Holdings only)
@@ -1709,6 +1764,16 @@ async def get_global_check():
             "asia_nikkei_change": 0,
             "asia_hangseng_change": 0
         }
+
+@app.get('/api/premarket')
+async def get_premarket():
+    """Get 09:08 AM NSE Pre-Open Equilibrium + Yesterday High/Low (PDH/PDL) Radar."""
+    try:
+        radar = await asyncio.to_thread(fetch_premarket_radar, 5)
+        return radar
+    except Exception as e:
+        return {"error": str(e), "candidates": []}
+
 
 @app.get('/api/fii')
 async def get_fii_dii():

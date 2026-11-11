@@ -572,8 +572,28 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
     # "Relative Strength Pullback & Retest" (RS-VPR)
     # ============================================================
     df['date'] = df.index.date
-    today_date = df['date'].iloc[-1]
+    unique_dates = sorted(df['date'].unique())
+    today_date = unique_dates[-1]
     today_candles = df[df['date'] == today_date]
+
+    # 0. Previous Day High (PDH), Low (PDL), and Close (PDC) Structural Levels
+    pdh = 0.0
+    pdl = 0.0
+    pdc = 0.0
+    pdh_status = "N/A"
+    if len(unique_dates) >= 2:
+        yday_candles = df[df['date'] == unique_dates[-2]]
+        if not yday_candles.empty:
+            pdh = float(yday_candles['High'].max().item() if hasattr(yday_candles['High'].max(), 'item') else yday_candles['High'].max())
+            pdl = float(yday_candles['Low'].min().item() if hasattr(yday_candles['Low'].min(), 'item') else yday_candles['Low'].min())
+            pdc = float(yday_candles['Close'].iloc[-1].item() if hasattr(yday_candles['Close'].iloc[-1], 'item') else yday_candles['Close'].iloc[-1])
+            if c_price > pdh:
+                bonus_score += 3
+                total_score += 3
+                bonuses.append(f"PDH Breakout (>{pdh:.1f})")
+                pdh_status = "ABOVE_PDH (Launchpad)"
+            else:
+                pdh_status = f"BELOW_PDH (Wall @{pdh:.1f})"
     
     # 1. 15-Minute Opening Range (ORB) calculation
     orb_high = 0.0
@@ -713,6 +733,14 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
             is_entry = False
             grade = "WAIT (Post-10:15 Midday Lull)"
 
+    # Gate 7: Previous Day High (PDH) Overhead Resistance Protection
+    # Never buy directly into Yesterday's High wall unless there is >= 1.2x Stop-Loss room!
+    if is_entry and pdh > 0 and c_price <= pdh:
+        dist_to_pdh = pdh - c_price
+        if dist_to_pdh < (1.2 * sl_risk):
+            is_entry = False
+            grade = f"WAIT (PDH Wall @ ₹{pdh:.1f})"
+
     return {
         'symbol': symbol,
         'score': float(total_score),
@@ -724,6 +752,10 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         'setup_name': str(setup_name),
         'relative_strength': float(relative_strength),
         'stock_gain_pct': float(stock_gain_pct),
+        'pdh': round(float(pdh), 2),
+        'pdl': round(float(pdl), 2),
+        'pdc': round(float(pdc), 2),
+        'pdh_status': str(pdh_status),
         'price': float(c_price),
         'vwap': float(c_vwap),
         'rsi': float(c_rsi),
@@ -1299,5 +1331,136 @@ def scan_swing_candidates(capital: float = 5000) -> list:
 
     signals.sort(key=lambda x: x['score'], reverse=True)
     return signals
+
+
+def fetch_premarket_radar(top_n: int = 5) -> dict:
+    """
+    09:08 AM NSE Pre-Open Equilibrium + Yesterday's High/Low (PDH/PDL) Predictor.
+    Identifies institutional Gap & Go leaders before the 09:15 AM bell.
+    """
+    import urllib.request, json, ssl
+    from concurrent.futures import ThreadPoolExecutor
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    advances = 0
+    declines = 0
+    unchanged = 0
+    raw_candidates = []
+    source = "NSE_PREOPEN_LIVE"
+
+    try:
+        req = urllib.request.Request(
+            'https://www.nseindia.com/api/market-data-pre-open?key=FO',
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Referer': 'https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market'
+            }
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=8) as res:
+            data = json.loads(res.read().decode('utf-8'))
+            advances = int(data.get('advances', 0))
+            declines = int(data.get('declines', 0))
+            unchanged = int(data.get('unchanged', 0))
+
+            for item in data.get('data', []):
+                meta = item.get('metadata', {})
+                sym = str(meta.get('symbol', '')).strip()
+                iep = float(meta.get('iep') or meta.get('lastPrice') or 0.0)
+                prev_c = float(meta.get('previousClose') or 0.0)
+                p_chg = float(meta.get('pChange') or 0.0)
+                turnover_cr = float(meta.get('totalTurnover') or 0.0) / 1e7
+
+                # Institutional Gap & Go sweet spot: Rs.250+, Gap +0.35% to +3.5%, >= Rs.0.5 Cr pre-open turnover
+                if sym and iep >= 250.0 and 0.35 <= p_chg <= 3.5 and turnover_cr >= 0.5:
+                    raw_candidates.append({
+                        'symbol': sym,
+                        'iep': round(iep, 2),
+                        'prev_close': round(prev_c, 2),
+                        'gap_pct': round(p_chg, 2),
+                        'turnover_cr': round(turnover_cr, 2),
+                    })
+    except Exception as e:
+        source = f"YAHOO_FALLBACK ({str(e)[:40]})"
+
+    # Fallback if NSE pre-open endpoint is unreachable
+    if not raw_candidates:
+        def _check_yf_gap(sym):
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS?interval=15m&range=5d"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, context=ctx, timeout=5) as res:
+                    d = json.loads(res.read().decode('utf-8'))
+                    m = d['chart']['result'][0]['meta']
+                    p = float(m.get('regularMarketPrice') or 0.0)
+                    pc = float(m.get('previousClose') or 0.0)
+                    if p >= 250.0 and pc > 0:
+                        g = ((p - pc) / pc) * 100.0
+                        if 0.35 <= g <= 3.5:
+                            return {
+                                'symbol': sym,
+                                'iep': round(p, 2),
+                                'prev_close': round(pc, 2),
+                                'gap_pct': round(g, 2),
+                                'turnover_cr': 1.0,
+                            }
+            except Exception:
+                pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=15) as ex:
+            res_list = list(ex.map(_check_yf_gap, DEFAULT_WATCHLIST[:45]))
+            raw_candidates = [r for r in res_list if r is not None]
+
+    # Sort top 12 by institutional pre-open turnover & gap strength
+    raw_candidates.sort(key=lambda x: (x['turnover_cr'] * max(0.5, x['gap_pct'])), reverse=True)
+    top_pool = raw_candidates[:12]
+
+    # Enrich each candidate with Yesterday's High (PDH) & Low (PDL)
+    def _enrich_pdh(cand):
+        sym = cand['symbol']
+        df = fetch_stock_data_direct(sym, period='5d', interval='15m')
+        pdh = 0.0
+        pdl = 0.0
+        signal_tag = "MOMENTUM GAP"
+        priority_boost = 1.0
+        if df is not None and len(df) >= 5:
+            df['date'] = df.index.date
+            u_dates = sorted(df['date'].unique())
+            # Use latest complete previous trading day
+            yday_df = df[df['date'] == u_dates[-2]] if len(u_dates) >= 2 else df[df['date'] == u_dates[-1]]
+            if not yday_df.empty:
+                pdh = float(yday_df['High'].max())
+                pdl = float(yday_df['Low'].min())
+                if cand['iep'] > pdh:
+                    signal_tag = "GAP ABOVE PDH 🔥"
+                    priority_boost = 3.0
+                elif pdh > 0 and (pdh - cand['iep']) / cand['iep'] <= 0.005:
+                    signal_tag = "AT PDH BREAKOUT 🎯"
+                    priority_boost = 2.0
+        cand['pdh'] = round(pdh, 2)
+        cand['pdl'] = round(pdl, 2)
+        cand['signal_tag'] = signal_tag
+        cand['rank_score'] = cand['turnover_cr'] * priority_boost + (cand['gap_pct'] * 2.0)
+        return cand
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        enriched = list(ex.map(_enrich_pdh, top_pool))
+
+    enriched.sort(key=lambda x: x['rank_score'], reverse=True)
+    breadth = "BULLISH" if advances > declines else ("BEARISH" if declines > advances else "NEUTRAL")
+
+    return {
+        'source': source,
+        'advances': advances,
+        'declines': declines,
+        'unchanged': unchanged,
+        'breadth': breadth,
+        'candidates': enriched[:top_n]
+    }
+
 
 
