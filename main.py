@@ -465,8 +465,10 @@ def check_active_positions(price_map: dict):
             t1_dist = t1_target - entry_p
             t1_progress = (current_price - entry_p) / t1_dist if t1_dist > 0 else 0.0
 
-            # Cut if held for >= 75 mins OR if clock reaches 12:00 PM without reaching 50% of T1
-            if (mins_held >= 75.0 or now.hour >= 12) and t1_progress < 0.5:
+            # Only cut stagnant trades if stuck in afternoon lull (>= 13:15 IST) without achieving 35% of T1,
+            # OR held >= 150 mins and still flat/negative (never cut a profitable morning winner early!)
+            is_afternoon_lull = (now.hour == 13 and now.minute >= 15) or (now.hour >= 14)
+            if (is_afternoon_lull and t1_progress < 0.35) or (mins_held >= 150.0 and current_price <= entry_p):
                 now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
                 exit_pnl = rem_qty * (current_price - entry_p)
                 total_pnl = pos.get('booked_profit', 0.0) + exit_pnl

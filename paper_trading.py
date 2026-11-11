@@ -10,7 +10,7 @@ ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_a
 # Groww exact fee structures:
 INTRADAY_ROUND_TRIP_FEE = 45.0  # Rs. 40 flat brokerage (buy+sell) + Rs. 5 STT/GST/exchange
 SWING_SELL_FEE = 20.0          # Groww Delivery: Rs. 0 brokerage, ~Rs. 20 DP charges + STT on sell
-SLIPPAGE_PCT_PER_LEG = 0.0015  # 0.15% adverse slippage on entry and exit (0.30% round-trip penalty)
+SLIPPAGE_PCT_PER_LEG = 0.0002  # 0.02% realistic spread/slippage per leg on liquid NSE stocks (0.04% round-trip)
 TRADE_LEDGER_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_book.csv")
 
 def append_trade_to_ledger(trade: dict):
