@@ -596,6 +596,22 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
                 pdh_status = "ABOVE_PDH (Launchpad)"
             else:
                 pdh_status = f"BELOW_PDH (Wall @{pdh:.1f})"
+
+    # 0b. Fixed-Range Volume Profile (FRVP: POC, VAH, LVN) + Order-Flow Delta Flip
+    vp = {'poc': 0.0, 'vah': 0.0, 'val': 0.0, 'lvn_support': 0.0, 'lvn_resistance': 0.0, 'bar_delta': 0.0, 'delta_flip': False, 'vp_bias': 'NEUTRAL'}
+    try:
+        from institutional_edge import compute_volume_profile
+        vp = compute_volume_profile(df)
+        if vp.get('vp_bias') == 'ABOVE_VALUE_BREAKOUT':
+            bonus_score += 2
+            total_score += 2
+            bonuses.append(f"Above VAH (₹{vp['vah']:.1f})")
+        if vp.get('delta_flip'):
+            bonus_score += 2
+            total_score += 2
+            bonuses.append("Delta Absorption Flip")
+    except Exception:
+        pass
     
     # 1. 15-Minute Opening Range (ORB) calculation
     orb_high = 0.0
@@ -763,6 +779,7 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         'pdl': round(float(pdl), 2),
         'pdc': round(float(pdc), 2),
         'pdh_status': str(pdh_status),
+        'vp': vp,
         'price': float(c_price),
         'vwap': float(c_vwap),
         'rsi': float(c_rsi),

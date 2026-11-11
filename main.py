@@ -250,8 +250,13 @@ def _send_telegram_alert(entries: list):
     valid_candidates.sort(key=lambda x: (x.get('rvol', 0.0), x.get('score', 0), x.get('t2_profit', 0)), reverse=True)
     
     from sentiment import fetch_news_sentiment
+    from engine import fetch_stock_data_direct
+    from institutional_edge import compute_volume_profile, run_bull_bear_judge
+
     best_entry = None
     news_info = {'sentiment_label': 'NEUTRAL', 'sentiment_score': 0.0, 'key_headline': ''}
+    judge_verdict = None
+
     for cand in valid_candidates:
         c_sym = cand.get('symbol', 'UNKNOWN')
         try:
@@ -261,7 +266,20 @@ def _send_telegram_alert(entries: list):
                 continue
             news_info = n_res
         except Exception:
-            pass
+            n_res = {'sentiment_label': 'NEUTRAL', 'sentiment_score': 0.0, 'key_headline': ''}
+
+        # Run Adversarial 3-Agent Debate (Bull vs Bear vs Judge) + Volume Profile Check
+        try:
+            df_cand = fetch_stock_data_direct(c_sym, period='5d', interval='15m')
+            vp = cand.get('vp') or compute_volume_profile(df_cand)
+            verdict = run_bull_bear_judge(cand, df_cand, vp, n_res)
+            if verdict.get('verdict') == 'SKIP':
+                print(f"[Judge SKIP] {c_sym} killed by Bear Agent: Bull {verdict['bull_score']} vs Bear {verdict['bear_risk']} | {verdict['bear_summary']}")
+                continue
+            judge_verdict = verdict
+        except Exception as je:
+            print(f"[Judge] Fallback allow {c_sym}: {je}")
+
         best_entry = cand
         break
         
@@ -335,6 +353,12 @@ def _send_telegram_alert(entries: list):
     text += f"🔊 <b>Volume Surge:</b> {rvol:.1f}x Avg ({vol_label})\n"
     if pdh_val > 0:
         text += f"📏 <b>Yesterday Levels:</b> PDH ₹{pdh_val:.1f} | PDL ₹{pdl_val:.1f} ({pdh_lbl})\n"
+    vp_data = best_entry.get('vp') or (judge_verdict.get('vp') if judge_verdict else {})
+    if vp_data and vp_data.get('poc', 0) > 0:
+        text += f"📊 <b>Volume Profile:</b> POC ₹{vp_data['poc']:.1f} | VAH ₹{vp_data['vah']:.1f} | LVN Sup ₹{vp_data['lvn_support']:.1f}\n"
+    if judge_verdict:
+        text += f"⚖️ <b>Judge Verdict:</b> <b>TAKE</b> (Bull {judge_verdict['bull_score']} vs Bear {judge_verdict['bear_risk']} | MC Odds: {judge_verdict['mc_odds']:.0f}%)\n"
+        text += f"   🐂 <i>{judge_verdict['bull_summary']}</i>\n"
     text += f"🌍 <b>Market Tide:</b> {nifty_desc} | <b>VIX:</b> {vix_val_num}\n"
     text += f"💥 <b>Top 1% Setup:</b> {setup_lbl}\n"
     text += f"🛡️ <b>Grade:</b> {grade} ({score:.0f}/16)\n"
