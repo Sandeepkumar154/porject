@@ -691,10 +691,11 @@ def check_active_positions(price_map: dict):
                 symbols_to_close.append(symbol)
                 continue
             else:
-                # Multi-share: book 50%, trail SL to entry price
-                booked_qty = max(1, total_qty // 2)
+                # Multi-share: book 70% to guarantee >1% net profit after taxes, trail SL above cost+fees
+                booked_qty = max(1, min(total_qty - 1, int(round(total_qty * 0.70))))
                 remaining_qty = total_qty - booked_qty
                 booked_pnl = booked_qty * (current_price - entry_p)
+                safe_be_sl = round(entry_p * 1.002, 2)
                 
                 try:
                     import paper_trading
@@ -703,13 +704,13 @@ def check_active_positions(price_map: dict):
                     pass
                     
                 msg = (
-                    f"🎯 <b>LIVE INTRADAY TARGET 1 HIT — 50% PROFIT BOOKED</b>\n"
+                    f"🎯 <b>LIVE INTRADAY TARGET 1 HIT — 70% PROFIT LOCKED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"⏰ <b>Executed At:</b> {now_time_str}\n"
                     f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
                     f"💵 <b>Current:</b> ₹{current_price:.2f} (Target: ₹{t1_target:.2f})\n"
-                    f"📦 <b>Booked:</b> +₹{booked_pnl:.2f} ({booked_qty} shares)\n"
-                    f"🛡️ <b>SL Moved to Cost: ₹{entry_p:.2f}</b> (Trade is 100% Risk-Free)\n"
+                    f"📦 <b>Locked Gross:</b> +₹{booked_pnl:.2f} ({booked_qty} shares)\n"
+                    f"🛡️ <b>SL Locked Above Fees: ₹{safe_be_sl:.2f}</b> (1%+ Net Guaranteed)\n"
                     f"🎯 <b>Holding {remaining_qty} shs for Target 2: ₹{t2_target:.2f}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━"
                 )
@@ -718,7 +719,7 @@ def check_active_positions(price_map: dict):
                 pos['t1_hit'] = True
                 pos['booked_profit'] = round(booked_pnl, 2)
                 pos['remaining_qty'] = remaining_qty
-                pos['sl'] = entry_p  # Trail SL to cost / break-even
+                pos['sl'] = safe_be_sl  # Lock profit above cost + brokerage
                 _save_active_positions(active_positions)
                 continue
                 

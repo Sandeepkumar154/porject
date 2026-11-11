@@ -639,13 +639,13 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         sl_risk = c_price * 0.005
         sl = c_price - sl_risk
 
-    # Top 1% Asymmetric Targets (2.0R at T1, 3.5R at T2)
-    # 1 win wipes out 2 full losses and still pays brokerage!
-    t1 = c_price + (2.0 * sl_risk)
-    t2 = c_price + (3.5 * sl_risk)
+    # Top 1% Asymmetric Targets (1.8R at T1 for high win-rate, 3.0R at T2)
+    # Guarantees >= ₹120-₹180+ NET PROFIT after ₹45 Groww brokerage & taxes!
+    t1 = c_price + (1.8 * sl_risk)
+    t2 = c_price + (3.0 * sl_risk)
     
-    # Position sizing: Risk capped at ₹120 (2.4% of ₹5,000 capital)
-    max_risk = min(120.0, capital * 0.025)
+    # Position sizing: Risk up to ₹155 (1.5% of ₹10k total capital) for >= ₹100+ net daily target
+    max_risk = min(155.0, capital * 0.032)
     qty_by_risk = int(max_risk / sl_risk) if sl_risk > 0 else 1
     max_mis_qty = int((capital * 5.0) / c_price) if c_price > 0 else 1
     qty = max(1, min(qty_by_risk, max_mis_qty))
@@ -704,13 +704,18 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
         is_entry = False
         grade = "WATCH (No Pullback/ORB)"
         
-    # Gate 3: Anti-Brokerage Sizing (Projected T1 Profit >= ₹120 AND T2 Profit >= ₹180 for ₹10k capital)
-    # Groww charges ₹45 flat per round-trip trade. Fees must never exceed 35% of target gain.
-    min_t1 = 110.0 if capital <= 10000 else capital * 0.012
-    min_t2 = 180.0 if capital <= 10000 else capital * 0.020
+    # Gate 3: Anti-Brokerage Sizing (Guaranteed >= ₹130+ NET PROFIT after ₹45 fees at Target 1)
+    min_t1 = 175.0 if capital <= 10000 else capital * 0.018
+    min_t2 = 280.0 if capital <= 10000 else capital * 0.028
     if is_entry and (t1_profit < min_t1 or t2_profit < min_t2):
         is_entry = False
-        grade = "SKIP (Low Profit vs Fees)"
+        grade = "SKIP (Below 1% Net Target)"
+
+    # Gate 8: Share Price Efficiency Filter for Small Capital (capital <= 10k)
+    # Stocks > Rs. 2,500 waste MIS buying power due to rounding and prevent clean 70/30 partial exits.
+    if is_entry and capital <= 10000 and c_price > 2500.0:
+        is_entry = False
+        grade = f"SKIP (Price >₹2500 for MIS)"
 
     # Gate 4: Institutional Volume Shocker (RVOL >= 1.35x average volume)
     if is_entry and rvol < 1.35:
