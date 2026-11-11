@@ -406,6 +406,34 @@ def _send_telegram_alert(entries: list):
     except Exception:
         pass
 
+def _handle_self_repair_if_loss(symbol: str, entry_time_str: str, exit_time_str: str, exit_reason: str, net_pnl: float):
+    """Run immediate post-loss forensic diagnosis & automatic parameter self-repair."""
+    if net_pnl >= 0:
+        return
+    try:
+        from self_repair import diagnose_and_repair
+        repair = diagnose_and_repair({
+            'symbol': symbol,
+            'entry_time': entry_time_str,
+            'exit_time': exit_time_str,
+            'exit_reason': exit_reason,
+            'net_pnl': net_pnl
+        })
+        repairs_txt = "\n".join([f"   ✅ {r}" for r in repair.get('repairs_applied', [])]) or "   ✅ Logged to Mistake Journal for pattern tracking"
+        repair_msg = (
+            f"🔧 <b>AUTO SELF-REPAIR ACTIVATED ({symbol})</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📉 <b>Loss Detected:</b> ₹{net_pnl:.2f}\n"
+            f"🔍 <b>Mistake Identified:</b> {repair.get('diagnosis')}\n"
+            f"🛠️ <b>Self-Fixes Applied Immediately:</b>\n{repairs_txt}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🧠 <i>Saved to Mistake Journal & live engine parameters updated automatically.</i>"
+        )
+        _send_telegram_message(repair_msg)
+    except Exception as se:
+        print(f"[SelfRepair] Error: {se}")
+
+
 def check_active_positions(price_map: dict):
     """
     Real-time tracking of active intraday positions:
@@ -549,6 +577,8 @@ def check_active_positions(price_map: dict):
                 except Exception:
                     pass
 
+                _handle_self_repair_if_loss(symbol, f"{pos.get('entry_date')} {pos.get('entry_time')}", now.strftime('%Y-%m-%d %H:%M:%S'), 'MOMENTUM_STAGNATION_EXIT', net_pnl)
+
                 symbols_to_close.append(symbol)
                 continue
         
@@ -603,7 +633,9 @@ def check_active_positions(price_map: dict):
                 })
             except Exception:
                 pass
-                
+
+            _handle_self_repair_if_loss(symbol, f"{pos.get('entry_date')} {pos.get('entry_time')}", now.strftime('%Y-%m-%d %H:%M:%S'), 'INTRADAY_320_CLOSE', net_pnl)
+
             symbols_to_close.append(symbol)
             continue
             
@@ -801,7 +833,8 @@ def check_active_positions(price_map: dict):
             except Exception:
                 pass
 
-                
+            _handle_self_repair_if_loss(symbol, f"{pos.get('entry_date')} {pos.get('entry_time')}", now.strftime('%Y-%m-%d %H:%M:%S'), 'TRAILED_SL' if t1_already_hit else 'STOP_LOSS', net_pnl)
+
             symbols_to_close.append(symbol)
             continue
             
@@ -2135,4 +2168,20 @@ async def get_swing_portfolio():
         return account.get("swing", {})
     except Exception as e:
         return {'error': str(e)}
+
+
+@app.get('/api/mistakes')
+async def get_mistake_journal():
+    """Get the automated Mistake Journal, active 14-day cooldown blacklist, and live tuned parameters."""
+    try:
+        from self_repair import load_mistake_journal, load_cooldown_blacklist
+        from self_tune import load_tuned_params
+        return {
+            'mistakes': load_mistake_journal(),
+            'blacklist': load_cooldown_blacklist(),
+            'current_params': load_tuned_params()
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
 

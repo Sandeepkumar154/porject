@@ -764,6 +764,17 @@ def scan_stock(symbol: str, capital: float = 5000, for_backtest: bool = False, d
             is_entry = False
             grade = f"WAIT (PDH Wall @ ₹{pdh:.1f})"
 
+    # Gate 9: Self-Repair 14-Day Cooldown Blacklist (Repeat Losing Stock Protection)
+    if is_entry and not for_backtest:
+        try:
+            from self_repair import load_cooldown_blacklist
+            bl = load_cooldown_blacklist()
+            if symbol in bl:
+                is_entry = False
+                grade = f"SKIP (14d Cooldown till {bl[symbol]})"
+        except Exception:
+            pass
+
     return {
         'symbol': symbol,
         'score': float(total_score),
