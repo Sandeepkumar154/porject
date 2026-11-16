@@ -636,7 +636,7 @@ def check_active_positions(price_map: dict):
                     pass
 
                 net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4928.40))
 
                 msg = (
                     f"⏱️ <b>LIVE INTRADAY TRADE EXITED — STAGNATION CUT</b>\n"
@@ -694,7 +694,7 @@ def check_active_positions(price_map: dict):
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4928.40))
             
             msg = (
                 f"🔴 <b>LIVE INTRADAY TRADE EXITED — 3:20 PM CLOSE</b>\n"
@@ -750,7 +750,7 @@ def check_active_positions(price_map: dict):
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4928.40))
             
             msg = (
                 f"🏆 <b>LIVE INTRADAY TRADE EXITED — TARGET 2 HIT ✅</b>\n"
@@ -809,7 +809,7 @@ def check_active_positions(price_map: dict):
                 except Exception:
                     pass
                 net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4928.40))
                 
                 msg = (
                     f"🎯 <b>LIVE INTRADAY TRADE EXITED — TARGET 1 HIT ✅</b>\n"
@@ -896,7 +896,7 @@ def check_active_positions(price_map: dict):
                 pass
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
-            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
+            new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4928.40))
             is_trailed = t1_already_hit or pos.get('trail_stage', 0) >= 1 or pos.get('be_locked', False)
             sl_header = "TRAILED SL HIT (PROFIT/COST LOCKED) 🛡️" if is_trailed else "STOP-LOSS HIT 🛑"
             sl_reason = "Trailed Stop hit at locked profit/breakeven" if is_trailed else "Strict risk cutoff executed to protect capital"
@@ -1105,8 +1105,8 @@ async def background_market_scanner():
                     _save_morning_greeted(today_str)
                     import paper_trading
                     acc_now = paper_trading.get_paper_account()
-                    intra_now = acc_now.get("intraday", {}).get("current_balance", 4663.39)
-                    swing_now = acc_now.get("swing", {}).get("current_balance", 4946.85)
+                    intra_now = acc_now.get("intraday", {}).get("current_balance", 4928.40)
+                    swing_now = acc_now.get("swing", {}).get("current_balance", 152.96)
                     swing_pos = acc_now.get("swing", {}).get("active_positions", [])
                     holding_str = ", ".join([f"{p['symbol']} ({p['qty']} sh @ ₹{p['entry_price']:.0f})" for p in swing_pos]) if swing_pos else "None"
                     
