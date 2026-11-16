@@ -279,9 +279,8 @@ def record_paper_exit(symbol: str, exit_price: float, exit_reason: str, exit_qty
             "trade": trade
         }
     else:
-        partial_proceeds = exit_qty * (slipped_exit_price - entry_price) - 45.0
-        intra['current_balance'] += partial_proceeds
-        intra['realised_pnl'] += partial_proceeds
+        # Partial exit: Record partial booked gross and reduce remaining shares.
+        # Do not alter account current_balance until full trade is closed to avoid double-counting.
         save_paper_account(account)
         return {
             "success": True,

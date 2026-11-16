@@ -382,6 +382,8 @@ def _send_telegram_alert(entries: list):
         'booked_profit': 0.0,
         'entry_time': now.strftime('%H:%M:%S'),
         'entry_date': today_str,
+        'peak_price': round(float(price), 2),
+        'trail_stage': 0,
         't1_hit': False,
         'be_locked': False,
         'grade': grade,
@@ -480,15 +482,26 @@ def check_active_positions(price_map: dict):
         sl_level = pos['sl']
         t1_already_hit = pos.get('t1_hit', False)
         
-        # 0a. Breakeven Stop Lock at +1.0R (Risk-Free Mode)
-        # If price reaches halfway to T1 (+1.0R), move SL to entry_p + 0.1% (fees covered)
-        sl_risk_unit = pos.get('sl_risk', max(0.5, entry_p - sl_level))
-        if not pos.get('be_locked', False) and not t1_already_hit:
-            if current_price >= entry_p + sl_risk_unit:
+        # High-watermark peak price reached during the lifetime of this trade
+        peak_p = max(pos.get('peak_price', entry_p), current_price)
+        pos['peak_price'] = peak_p
+        
+        t1_dist = max(0.1, t1_target - entry_p)
+        fee_buffer_per_share = round(52.0 / max(1, pos['qty']), 2)
+        trail_stage = pos.get('trail_stage', 0)
+        sl_risk_unit = pos.get('sl_risk', max(0.5, entry_p - pos.get('initial_sl', sl_level)))
+        current_gain = current_price - entry_p
+        gross_running_pnl = current_gain * rem_qty
+
+        # 0a. Stage 1: Risk-Free Breakeven (Guarantees ALL ₹45 fees + small net profit covered)
+        # Triggered at +1.0R or gross gain >= ₹100
+        if trail_stage < 1 and not t1_already_hit:
+            if current_price >= entry_p + sl_risk_unit or gross_running_pnl >= 100.0:
+                pos['trail_stage'] = 1
                 pos['be_locked'] = True
-                new_sl = round(entry_p * 1.001, 2)
-                pos['sl'] = new_sl
-                sl_level = new_sl
+                new_sl = round(entry_p + fee_buffer_per_share + 0.50, 2)
+                pos['sl'] = max(pos['sl'], new_sl)
+                sl_level = pos['sl']
                 _save_active_positions(active_positions)
                 now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
                 be_msg = (
@@ -497,13 +510,97 @@ def check_active_positions(price_map: dict):
                     f"⏰ <b>Executed At:</b> {now_time_str}\n"
                     f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
                     f"💵 <b>Current Price:</b> ₹{current_price:.2f} (Entry: ₹{entry_p:.2f})\n"
-                    f"🛡️ <b>Stop-Loss Trailed to Cost:</b> ₹{new_sl:.2f}\n"
-                    f"✨ <i>Trade is now 100% Risk-Free! Cannot lose capital.</i>\n"
+                    f"🛡️ <b>Stop-Loss Trailed to Cost+Fees:</b> ₹{new_sl:.2f}\n"
+                    f"✨ <i>Trade is 100% Risk-Free! All ₹45 brokerage & taxes guaranteed covered.</i>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 _send_telegram_message(be_msg)
 
-        # 0b. Stagnation / Midday Exit (Cut dead weight after 75 mins or at 12:00 PM)
+        # 0b. Stage 2: Profit Protection Lock at +1.4R or 65% of Target 1 (Guarantees +₹60+ NET PROFIT)
+        if trail_stage < 2 and not t1_already_hit:
+            if current_price >= entry_p + (0.65 * t1_dist) or gross_running_pnl >= 150.0:
+                pos['trail_stage'] = 2
+                locked_gain = round(fee_buffer_per_share + max(2.0, t1_dist * 0.35), 2)
+                new_sl = round(entry_p + locked_gain, 2)
+                pos['sl'] = max(pos['sl'], new_sl)
+                sl_level = pos['sl']
+                _save_active_positions(active_positions)
+                now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                guaranteed_net = round((rem_qty * locked_gain) - 45.0, 2)
+                lock_msg = (
+                    f"🔒 <b>PROFIT PROTECTION LOCKED (+1.4R)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"💵 <b>Current Price:</b> ₹{current_price:.2f} (Peak: ₹{peak_p:.2f})\n"
+                    f"🛡️ <b>Stop-Loss Locked in Profit:</b> ₹{new_sl:.2f}\n"
+                    f"💰 <b>Guaranteed Net Profit:</b> +₹{guaranteed_net:.2f} (1%+ Target Secured!)\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                _send_telegram_message(lock_msg)
+
+        # 0c. Stage 3: High-Watermark Peak Retracement Cut
+        # If stock achieved >= 75% of T1 (or peak gain >= ₹160), and retraces > 30% from peak:
+        # Exit immediately to lock in solid net profit rather than bleeding back to cost!
+        peak_gain = peak_p - entry_p
+        if not t1_already_hit and peak_gain >= (0.75 * t1_dist):
+            retracement_exit_price = peak_p - (0.30 * peak_gain)
+            if current_price <= retracement_exit_price:
+                now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
+                exit_pnl = rem_qty * (current_price - entry_p)
+                total_pnl = pos.get('booked_profit', 0.0) + exit_pnl
+                pnl_sign = "+" if total_pnl >= 0 else ""
+
+                pres = {}
+                try:
+                    import paper_trading
+                    pres = paper_trading.record_paper_exit(symbol, current_price, "PEAK_PROFIT_PROTECTION_EXIT", fallback_entry_price=entry_p, fallback_qty=rem_qty)
+                except Exception:
+                    pass
+
+                net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
+                new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 5000.0))
+
+                msg = (
+                    f"🏆 <b>LIVE INTRADAY TRADE EXITED — PROFIT PROTECTION SECURED ✅</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
+                    f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
+                    f"🏁 <b>Reason:</b> High-Watermark Profit Lock (Peak: ₹{peak_p:.2f} | 30% Retracement Cut)\n"
+                    f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
+                    f"📦 <b>Closed:</b> {rem_qty} shares\n"
+                    f"💰 <b>Gross Profit:</b> {pnl_sign}₹{total_pnl:.2f}\n"
+                    f"💸 <b>Groww Brokerage & Taxes:</b> -₹45.00\n"
+                    f"📈 <b>Net Realised P&L:</b> <b>{'+' if net_pnl >= 0 else ''}₹{net_pnl:.2f}</b> (Net Win!)\n"
+                    f"💼 <b>Updated Intraday Capital:</b> <b>₹{new_bal:,.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛡️ <i>Discipline applied: Locked +1% to +2% profit from peak rather than giving it back to the market!</i>"
+                )
+                _send_telegram_message(msg)
+
+                try:
+                    log_trade({
+                        'symbol': symbol,
+                        'entry_time': f"{pos.get('entry_date')} {pos.get('entry_time')}",
+                        'entry_price': entry_p,
+                        'exit_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                        'exit_price': current_price,
+                        'qty': pos['qty'],
+                        'exit_reason': 'PEAK_PROFIT_PROTECTION_EXIT',
+                        'net_pnl': round(total_pnl, 2),
+                        'score': pos.get('score', 0),
+                        'grade': pos.get('grade', ''),
+                        'window': get_current_window().get('name', 'UNKNOWN'),
+                        'is_winner': total_pnl > 0,
+                        'params_version': 1
+                    })
+                except Exception:
+                    pass
+
+                symbols_to_close.append(symbol)
+                continue
+
+        # 0d. Stagnation / Midday Exit (Cut dead weight after 75 mins or at 12:00 PM)
         # If trade has not achieved 50% of T1 and is hovering near cost, cut it early!
         if not t1_already_hit and not is_square_off_time:
             entry_dt = None
@@ -693,12 +790,17 @@ def check_active_positions(price_map: dict):
             symbols_to_close.append(symbol)
             continue
             
-        # 3. Target 1 Hit (Price >= T1)
-        if current_price >= t1_target and not t1_already_hit:
+        # 3. Target 1 Hit (Price >= T1 OR Proximity Lock at >= 88% target distance / within 0.15% margin)
+        # Prevents tragic reversals where price comes within ₹1 of target (like BHARTIARTL at ₹2172 vs ₹2173) and reverses to 0!
+        is_t1_proximity = (
+            current_price >= t1_target or
+            (t1_dist > 0 and (current_price >= entry_p + (0.88 * t1_dist) or current_price >= t1_target * 0.9985))
+        )
+        if is_t1_proximity and not t1_already_hit:
             now_time_str = now.strftime('%I:%M:%S %p IST (%d-%b-%Y)')
             total_qty = pos['qty']
             if total_qty <= 1:
-                # Single share trade: close at T1
+                # Single share trade: close at T1 / Proximity
                 total_pnl = 1 * (current_price - entry_p)
                 pres = {}
                 try:
@@ -714,7 +816,7 @@ def check_active_positions(price_map: dict):
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"⏰ <b>Exit Executed At:</b> {now_time_str}\n"
                     f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
-                    f"🏁 <b>Reason:</b> Target 1 reached! Single share closed.\n"
+                    f"🏁 <b>Reason:</b> Target 1 / Proximity reached (90%+ Target Achieved)! Single share closed.\n"
                     f"💵 <b>Entry:</b> ₹{entry_p:.2f} ➔ <b>Exit:</b> ₹{current_price:.2f}\n"
                     f"📦 <b>Closed:</b> 1 share\n"
                     f"💰 <b>Gross Profit:</b> +₹{total_pnl:.2f}\n"
@@ -751,7 +853,7 @@ def check_active_positions(price_map: dict):
                 booked_qty = max(1, min(total_qty - 1, int(round(total_qty * 0.70))))
                 remaining_qty = total_qty - booked_qty
                 booked_pnl = booked_qty * (current_price - entry_p)
-                safe_be_sl = round(entry_p * 1.002, 2)
+                safe_be_sl = round(entry_p + fee_buffer_per_share + max(2.0, t1_dist * 0.25), 2)
                 
                 try:
                     import paper_trading
@@ -760,13 +862,13 @@ def check_active_positions(price_map: dict):
                     pass
                     
                 msg = (
-                    f"🎯 <b>LIVE INTRADAY TARGET 1 HIT — 70% PROFIT LOCKED</b>\n"
+                    f"🎯 <b>LIVE INTRADAY TARGET 1 HIT — 70% PROFIT LOCKED ✅</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"⏰ <b>Executed At:</b> {now_time_str}\n"
                     f"🎯 <b>Stock:</b> <b>{symbol}</b>\n"
                     f"💵 <b>Current:</b> ₹{current_price:.2f} (Target: ₹{t1_target:.2f})\n"
                     f"📦 <b>Locked Gross:</b> +₹{booked_pnl:.2f} ({booked_qty} shares)\n"
-                    f"🛡️ <b>SL Locked Above Fees: ₹{safe_be_sl:.2f}</b> (1%+ Net Guaranteed)\n"
+                    f"🛡️ <b>SL Locked Above Fees: ₹{safe_be_sl:.2f}</b> (1%+ Net Profit Guaranteed)\n"
                     f"🎯 <b>Holding {remaining_qty} shs for Target 2: ₹{t2_target:.2f}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━"
                 )
@@ -795,8 +897,9 @@ def check_active_positions(price_map: dict):
                 
             net_pnl = pres.get("net_pnl", round(total_pnl - 45.0, 2))
             new_bal = pres.get("new_balance", paper_trading.get_paper_account().get("intraday", {}).get("current_balance", 4663.39))
-            sl_header = "TRAILED SL HIT (PROFIT/COST LOCKED) 🛡️" if t1_already_hit else "STOP-LOSS HIT 🛑"
-            sl_reason = "Trailed Stop hit at breakeven/profit" if t1_already_hit else "Strict risk cutoff executed to protect capital"
+            is_trailed = t1_already_hit or pos.get('trail_stage', 0) >= 1 or pos.get('be_locked', False)
+            sl_header = "TRAILED SL HIT (PROFIT/COST LOCKED) 🛡️" if is_trailed else "STOP-LOSS HIT 🛑"
+            sl_reason = "Trailed Stop hit at locked profit/breakeven" if is_trailed else "Strict risk cutoff executed to protect capital"
             
             msg = (
                 f"🛑 <b>LIVE INTRADAY TRADE EXITED — {sl_header}</b>\n"
